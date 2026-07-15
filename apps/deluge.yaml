@@ -31,6 +31,45 @@ spec:
         app: deluge
     spec:
       containers:
+        # VPN Container (Gluetun)
+        - name: gluetun
+          image: qmcgaw/gluetun:latest
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+          ports:
+            - containerPort: 8112
+              name: web
+            - containerPort: 58846
+              name: daemon
+            - containerPort: 58946
+              name: bt-tcp
+            - containerPort: 58946
+              protocol: UDP
+              name: bt-udp
+          env:
+            - name: VPN_SERVICE_PROVIDER
+              value: "private internet access"
+            - name: VPN_TYPE
+              value: "wireguard"
+            - name: SERVER_REGIONS
+              value: "Netherlands"
+            - name: OPENVPN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-auth
+                  key: user
+            - name: OPENVPN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-auth
+                  key: pass
+          volumeMounts:
+            - name: gluetun-config
+              mountPath: /gluetun
+
+        # Deluge Container
         - name: deluge
           image: lscr.io/linuxserver/deluge:latest
           env:
@@ -40,12 +79,6 @@ spec:
               value: "1000"
             - name: TZ
               value: "America/New_York"
-          ports:
-            - containerPort: 8112
-            - containerPort: 58846
-            - containerPort: 58946
-            - containerPort: 58946
-              protocol: UDP
           volumeMounts:
             - name: config
               mountPath: /config
@@ -55,6 +88,8 @@ spec:
         - name: config
           persistentVolumeClaim:
             claimName: deluge-config-pvc
+        - name: gluetun-config
+          emptyDir: {}
         - name: media
           persistentVolumeClaim:
             claimName: nfs-media-pvc
