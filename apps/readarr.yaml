@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: readarr
-          image: hotio/readarr:latest
+          image: ghcr.io/linuxserver/readarr:develop
           env:
             - name: PUID
               value: "1000"
