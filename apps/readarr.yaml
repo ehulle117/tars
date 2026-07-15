@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: readarr
-          image: lscr.io/linuxserver/readarr:amd64-nightly
+          image: hotio/readarr:latest
           env:
             - name: PUID
               value: "1000"
