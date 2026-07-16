@@ -57,6 +57,8 @@ spec:
               value: "openvpn"
             - name: HTTPPROXY
               value: "on"
+            - name: OPENVPN_CUSTOM_CONFIG
+              value: "/gluetun/custom.ovpn"
             - name: OPENVPN_USER
               valueFrom:
                 secretKeyRef:
