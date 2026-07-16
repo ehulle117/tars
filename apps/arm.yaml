@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arm-config-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path 
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: arm
+  namespace: apps
+  labels:
+    app: arm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: arm
+  template:
+    metadata:
+      labels:
+        app: arm
+    spec:
+      containers:
+        - name: arm
+          image: automaticrippingmachine/automatic-ripping-machine:latest
+          securityContext:
+            privileged: true
+          ports:
+            - containerPort: 8080
+              name: web
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/arm/config
+            - name: media
+              mountPath: /home/arm/media
+              subPath: raw
+            - name: media
+              mountPath: /home/arm/completed
+              subPath: completed
+            - name: dev-sr0
+              mountPath: /dev/sr0
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: arm-config-pvc
+        - name: media
+          persistentVolumeClaim:
+            claimName: nfs-media-pvc
+        - name: dev-sr0
+          hostPath:
+            path: /dev/sr0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: arm-svc
+  namespace: apps
+spec:
+  type: LoadBalancer
+  selector:
+    app: arm
+  ports:
+    - name: web
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: arm-ingress
+  namespace: apps
+spec:
+  rules:
+    - host: arm.tars.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: arm-svc
+                port:
+                  number: 8080
