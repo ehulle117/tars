@@ -52,13 +52,13 @@ spec:
               name: httpproxy
           env:
             - name: VPN_SERVICE_PROVIDER
-              value: "custom"
+              value: "private internet access"
             - name: VPN_TYPE
-              value: "openvpn"
+              value: "wireguard"
+            - name: SERVER_REGIONS
+              value: "CA Toronto"
             - name: HTTPPROXY
               value: "on"
-            - name: OPENVPN_CUSTOM_CONFIG
-              value: "/gluetun/custom.ovpn"
             - name: OPENVPN_USER
               valueFrom:
                 secretKeyRef:
@@ -70,8 +70,10 @@ spec:
                   name: vpn-auth
                   key: pass
           volumeMounts:
-            - name: gluetun-config
-              mountPath: /gluetun
+            - name: config
+              mountPath: /config
+            - name: media
+              mountPath: /downloads
 
         # Deluge Container
         - name: deluge
