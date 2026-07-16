@@ -48,6 +48,8 @@ spec:
             - containerPort: 58946
               protocol: UDP
               name: bt-udp
+            - containerPort: 8888
+              name: httpproxy
           env:
             - name: VPN_SERVICE_PROVIDER
               value: "private internet access"
@@ -55,6 +57,8 @@ spec:
               value: "openvpn"
             - name: SERVER_REGIONS
               value: "Netherlands"
+            - name: HTTPPROXY
+              value: "on"
             - name: OPENVPN_USER
               valueFrom:
                 secretKeyRef:
@@ -120,3 +124,7 @@ spec:
       protocol: UDP
       port: 58946
       targetPort: 58946
+    - name: httpproxy
+      protocol: TCP
+      port: 8888
+      targetPort: 8888
