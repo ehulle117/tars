@@ -67,7 +67,7 @@ spec:
             - name: ENABLE_PRIVOXY
               value: "yes"
             - name: STRICT_PORT_FORWARD
-              value: "yes"
+              value: "no"
             - name: LAN_NETWORK
               value: "10.42.0.0/16,10.43.0.0/16"
             - name: PUID
