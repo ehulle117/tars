@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tars-appdata-backup
+  namespace: apps
+spec:
+  schedule: "0 3 * * *" # Run at 3 AM every day
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: alpine:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting backup of k3s local-path storage..."
+              DATE=$(date +%Y-%m-%d_%H-%M-%S)
+              mkdir -p /destination/tars_k8s_appdata
+              tar -czf /destination/tars_k8s_appdata/backup_${DATE}.tar.gz -C /source .
+              echo "Backup completed successfully: backup_${DATE}.tar.gz"
+              echo "Cleaning up backups older than 7 days..."
+              find /destination/tars_k8s_appdata -name "backup_*.tar.gz" -mtime +7 -exec rm {} \;
+              echo "Cleanup complete."
+            volumeMounts:
+            - name: source-data
+              mountPath: /source
+              readOnly: true
+            - name: destination-data
+              mountPath: /destination
+          restartPolicy: OnFailure
+          volumes:
+          - name: source-data
+            hostPath:
+              path: /var/lib/rancher/k3s/storage
+              type: Directory
+          - name: destination-data
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc
