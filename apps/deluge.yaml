@@ -31,9 +31,8 @@ spec:
         app: deluge
     spec:
       containers:
-        # VPN Container (Gluetun)
-        - name: gluetun
-          image: qmcgaw/gluetun:latest
+        - name: deluge
+          image: binhex/arch-delugevpn:2.2.0-1-04
           securityContext:
             capabilities:
               add:
@@ -48,35 +47,19 @@ spec:
             - containerPort: 58946
               protocol: UDP
               name: bt-udp
-            - containerPort: 8888
+            - containerPort: 8118
               name: httpproxy
           env:
-            - name: VPN_SERVICE_PROVIDER
-              value: "private internet access"
-            - name: VPN_TYPE
-              value: "openvpn"
-            - name: HTTPPROXY
-              value: "on"
-            - name: OPENVPN_USER
-              valueFrom:
-                secretKeyRef:
-                  name: vpn-auth
-                  key: user
-            - name: OPENVPN_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: vpn-auth
-                  key: pass
-          volumeMounts:
-            - name: config
-              mountPath: /config
-            - name: media
-              mountPath: /downloads
-
-        # Deluge Container
-        - name: deluge
-          image: lscr.io/linuxserver/deluge:latest
-          env:
+            - name: VPN_ENABLED
+              value: "yes"
+            - name: VPN_PROV
+              value: "custom"
+            - name: ENABLE_PRIVOXY
+              value: "yes"
+            - name: STRICT_PORT_FORWARD
+              value: "yes"
+            - name: LAN_NETWORK
+              value: "10.42.0.0/16,10.43.0.0/16"
             - name: PUID
               value: "1000"
             - name: PGID
@@ -92,9 +75,6 @@ spec:
         - name: config
           persistentVolumeClaim:
             claimName: deluge-config-pvc
-        - name: gluetun-config
-          secret:
-            secretName: deluge-ovpn-config
         - name: media
           persistentVolumeClaim:
             claimName: nfs-media-pvc
@@ -127,5 +107,5 @@ spec:
       targetPort: 58946
     - name: httpproxy
       protocol: TCP
-      port: 8888
-      targetPort: 8888
+      port: 8118
+      targetPort: 8118
