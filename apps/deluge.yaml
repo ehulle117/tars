@@ -53,7 +53,17 @@ spec:
             - name: VPN_ENABLED
               value: "yes"
             - name: VPN_PROV
-              value: "custom"
+              value: "pia"
+            - name: VPN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-auth
+                  key: user
+            - name: VPN_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-auth
+                  key: pass
             - name: ENABLE_PRIVOXY
               value: "yes"
             - name: STRICT_PORT_FORWARD
