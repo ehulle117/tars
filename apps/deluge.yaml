@@ -52,11 +52,9 @@ spec:
               name: httpproxy
           env:
             - name: VPN_SERVICE_PROVIDER
-              value: "private internet access"
+              value: "custom"
             - name: VPN_TYPE
               value: "openvpn"
-            - name: SERVER_REGIONS
-              value: "Netherlands"
             - name: HTTPPROXY
               value: "on"
             - name: OPENVPN_USER
@@ -93,7 +91,8 @@ spec:
           persistentVolumeClaim:
             claimName: deluge-config-pvc
         - name: gluetun-config
-          emptyDir: {}
+          secret:
+            secretName: deluge-ovpn-config
         - name: media
           persistentVolumeClaim:
             claimName: nfs-media-pvc
