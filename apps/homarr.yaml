@@ -37,7 +37,7 @@ spec:
             - containerPort: 7575
           volumeMounts:
             - name: config
-              mountPath: /appdata
+              mountPath: /app/data
       volumes:
         - name: config
           persistentVolumeClaim:
