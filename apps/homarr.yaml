@@ -43,7 +43,7 @@ spec:
               mountPath: /app/data
             - name: config
               mountPath: /data
-              subPath: db
+              subPath: data
             - name: config
               mountPath: /appdata
       volumes:
