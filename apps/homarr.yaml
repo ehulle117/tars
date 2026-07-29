@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: homarr
-          image: ghcr.io/ajnart/homarr:latest
+          image: ghcr.io/homarr-labs/homarr:latest
           env:
             - name: SECRET_ENCRYPTION_KEY
               value: "899a8161954b79a296512d41f492400a1cd27e60fdf23b80631f1d70853f1524"
@@ -43,7 +43,7 @@ spec:
               mountPath: /app/data
             - name: config
               mountPath: /data
-              subPath: data
+              subPath: db
             - name: config
               mountPath: /appdata
       volumes:
