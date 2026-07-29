@@ -33,11 +33,19 @@ spec:
       containers:
         - name: homarr
           image: ghcr.io/ajnart/homarr:0.14.3
+          env:
+            - name: SECRET_ENCRYPTION_KEY
+              value: "899a8161954b79a296512d41f492400a1cd27e60fdf23b80631f1d70853f1524"
           ports:
             - containerPort: 7575
           volumeMounts:
             - name: config
               mountPath: /app/data
+            - name: config
+              mountPath: /data
+              subPath: db
+            - name: config
+              mountPath: /appdata
       volumes:
         - name: config
           persistentVolumeClaim:
