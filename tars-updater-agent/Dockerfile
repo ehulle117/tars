@@ -1,11 +1,8 @@
 FROM python:3.11-slim
 
-# Install trivy for vulnerability scanning
-RUN apt-get update && apt-get install -y wget apt-transport-https gnupg lsb-release \
-    && wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | apt-key add - \
-    && echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | tee -a /etc/apt/sources.list.d/trivy.list \
-    && apt-get update \
-    && apt-get install -y trivy \
+# Install trivy for vulnerability scanning via official script
+RUN apt-get update && apt-get install -y curl \
+    && curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
