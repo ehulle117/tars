@@ -50,6 +50,10 @@ spec:
               value: "http://radarr-svc.apps.svc.cluster.local:7878"
             - name: SONARR_0_URL
               value: "http://sonarr-svc.apps.svc.cluster.local:8989"
+            - name: LIDARR_0_URL
+              value: "http://lidarr-svc.apps.svc.cluster.local:8686"
+            - name: READARR_0_URL
+              value: "http://readarr-svc.apps.svc.cluster.local:8787"
           envFrom:
             - secretRef:
                 name: fetcharr-secrets
