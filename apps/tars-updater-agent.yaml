@@ -63,7 +63,7 @@ spec:
     spec:
       containers:
         - name: agent
-          image: ghcr.io/YOUR_GITHUB_USERNAME/tars-updater-agent:latest
+          image: ghcr.io/ehulle117/tars-updater-agent:main
           imagePullPolicy: Always
           env:
             - name: SMTP_PASSWORD
