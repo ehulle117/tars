@@ -2,7 +2,7 @@ import time
 import schedule
 import logging
 from app.config import config
-from app.scanners.docker_scanner import get_running_containers, check_image_updates
+from app.scanners.k8s_scanner import get_running_containers, check_image_updates
 from app.scanners.trivy_scanner import scan_image
 from app.scanners.os_scanner import get_os_updates
 from app.storage.db import has_cve_been_reported, mark_cve_reported
