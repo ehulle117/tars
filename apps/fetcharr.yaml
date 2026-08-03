@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fetcharr-config-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path 
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fetcharr
+  namespace: apps
+  labels:
+    app: fetcharr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fetcharr
+  strategy:
+    type: Recreate 
+  template:
+    metadata:
+      labels:
+        app: fetcharr
+    spec:
+      containers:
+        - name: fetcharr
+          image: egg82/fetcharr:latest
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: "America/New_York"
+            - name: LOG_MODE
+              value: "info"
+            - name: SEARCH_AMOUNT
+              value: "5"
+            - name: SEARCH_INTERVAL
+              value: "1hour"
+            - name: RADARR_0_URL
+              value: "http://radarr-svc.apps.svc.cluster.local:7878"
+            - name: SONARR_0_URL
+              value: "http://sonarr-svc.apps.svc.cluster.local:8989"
+          envFrom:
+            - secretRef:
+                name: fetcharr-secrets
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              subPath: config
+            - name: config
+              mountPath: /app/cache
+              subPath: cache
+            - name: config
+              mountPath: /app/logs
+              subPath: logs
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: fetcharr-config-pvc
