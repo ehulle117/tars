@@ -1,0 +1,93 @@
+---
+# 1. ConfigMap for the agent's configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tars-updater-config
+  namespace: apps
+data:
+  agent-config.yaml: |
+    smtp:
+      host: "smtp.gmail.com"
+      port: 587
+      username: "ehulle117@gmail.com"
+      from_address: "ehulle117@gmail.com"
+      to_address: "ehulle117@gmail.com"
+      tls: true
+    schedule:
+      daily_scan_time: "02:00"
+      weekly_digest_day: "sunday"
+      weekly_digest_time: "08:00"
+    scanners:
+      enable_docker: true
+      enable_os: false
+      enable_trivy: true
+    ignore:
+      containers: []
+      packages: []
+
+---
+# 3. Persistent Volume Claim for the SQLite tracking database
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tars-updater-db-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path 
+  resources:
+    requests:
+      storage: 1Gi
+---
+# 4. Deployment for the agent
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tars-updater-agent
+  namespace: apps
+  labels:
+    app: tars-updater-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tars-updater-agent
+  strategy:
+    type: Recreate 
+  template:
+    metadata:
+      labels:
+        app: tars-updater-agent
+    spec:
+      containers:
+        - name: agent
+          image: ghcr.io/YOUR_GITHUB_USERNAME/tars-updater-agent:latest
+          imagePullPolicy: Always
+          env:
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-auth
+                  key: password
+            - name: DB_PATH
+              value: "/data/state.db"
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/agent-config.yaml
+              subPath: agent-config.yaml
+            - name: db-volume
+              mountPath: /data
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+      volumes:
+        - name: config-volume
+          configMap:
+            name: tars-updater-config
+        - name: db-volume
+          persistentVolumeClaim:
+            claimName: tars-updater-db-pvc
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock

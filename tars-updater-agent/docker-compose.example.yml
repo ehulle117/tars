@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  updater-agent:
+    image: ghcr.io/your-github-username/tars-updater-agent:latest
+    container_name: tars-updater-agent
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Allow querying running containers
+      - ./agent-config.yaml:/app/agent-config.yaml:ro # Configuration file
+      - ./state.db:/app/state.db:rw                   # Persistent database for state
+      # - /var/lib/dpkg:/var/lib/dpkg:ro              # Uncomment if you enable OS scanning for Debian/Ubuntu
+    environment:
+      - SMTP_PASSWORD=your_secure_password_here
+      - DB_PATH=/app/state.db

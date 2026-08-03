@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+    body { font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; }
+    .container { background-color: #ffffff; padding: 20px; border-radius: 8px; border-top: 5px solid #5bc0de; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    h1 { color: #333; }
+    h2 { color: #5bc0de; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+    ul { list-style-type: none; padding: 0; }
+    li { background-color: #f9f9f9; margin-bottom: 5px; padding: 10px; border-radius: 4px; }
+    .footer { font-size: 12px; color: #777; margin-top: 20px; }
+</style>
+</head>
+<body>
+    <div class="container">
+        <h1>📅 Tars Weekly Update Digest</h1>
+        <p>Here is your summary of available updates and system status for the week.</p>
+        
+        {% if os_updates %}
+        <h2>System Packages</h2>
+        <ul>
+            {% for update in os_updates %}
+            <li><strong>{{ update.name }}</strong> ({{ update.version }})</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p>No baremetal OS packages require updating.</p>
+        {% endif %}
+
+        {% if container_updates %}
+        <h2>Container Images</h2>
+        <ul>
+            {% for update in container_updates %}
+            <li><strong>{{ update.name }}</strong> is outdated. (Current: {{ update.current }})</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p>All scanned containers appear to be up to date.</p>
+        {% endif %}
+        
+        <div class="footer">
+            <p>Sent by Tars Updater Agent.</p>
+        </div>
+    </div>
+</body>
+</html>

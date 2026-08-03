@@ -1,0 +1,25 @@
+# Secrets and configuration
+agent-config.yaml
+.env
+*.sqlite
+*.db
+
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+env/
+.venv/
+
+# IDEs
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+    body { font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; }
+    .container { background-color: #ffffff; padding: 20px; border-radius: 8px; border-top: 5px solid #d9534f; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    h1 { color: #d9534f; }
+    .vuln-item { background-color: #fff3f3; padding: 15px; margin-bottom: 10px; border-left: 4px solid #d9534f; border-radius: 4px; }
+    .footer { font-size: 12px; color: #777; margin-top: 20px; }
+</style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚨 Critical Security Alert</h1>
+        <p>The Tars Updater Agent has detected new critical vulnerabilities that require immediate attention.</p>
+        
+        {% for vuln in vulnerabilities %}
+        <div class="vuln-item">
+            <h3>{{ vuln.cve_id }} in {{ vuln.target }}</h3>
+            <p><strong>Package:</strong> {{ vuln.pkg_name }} ({{ vuln.installed_version }})</p>
+            <p><strong>Fixed Version:</strong> {{ vuln.fixed_version | default('None yet', true) }}</p>
+            <p><strong>Description:</strong> {{ vuln.title }}</p>
+        </div>
+        {% endfor %}
+        
+        <div class="footer">
+            <p>Sent by Tars Updater Agent. This alert will not be repeated for these specific CVEs.</p>
+        </div>
+    </div>
+</body>
+</html>
