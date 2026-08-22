@@ -6,6 +6,10 @@ A robust, self-hosted Python service built to run on Tars. It monitors Docker co
 - **Daily Vulnerability Scanning**: Connects to the local Docker socket and runs Trivy against running images. If a `CRITICAL` severity CVE is found, it sends an immediate alert.
 - **Weekly Digest**: Summarizes pending baremetal OS updates and container updates into a clean HTML email.
 - **State Tracking**: Uses a local SQLite database to track what has already been reported, ensuring you don't suffer from alert fatigue.
+- **Persistent Findings History**: Every scanned vulnerability and pending update is also written to `vulnerability_findings` / `update_findings` tables in the same SQLite DB (with first/last seen timestamps), independent of email dedup — so findings remain queryable even after the alert email has been sent. View them with:
+  ```bash
+  python -m app.report
+  ```
 
 ## Deployment
 

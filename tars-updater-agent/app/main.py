@@ -5,7 +5,10 @@ from app.config import config
 from app.scanners.k8s_scanner import get_running_containers, check_image_updates
 from app.scanners.trivy_scanner import scan_image
 from app.scanners.os_scanner import get_os_updates
-from app.storage.db import has_cve_been_reported, mark_cve_reported
+from app.storage.db import (
+    has_cve_been_reported, mark_cve_reported,
+    record_vulnerability_finding, record_update_finding,
+)
 from app.notifiers.email import send_email
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,6 +24,7 @@ def daily_job():
     for c in containers:
         vulns = scan_image(c["image"])
         for v in vulns:
+            record_vulnerability_finding(v)
             if not has_cve_been_reported(v["cve_id"], v["target"]):
                 new_criticals.append(v)
                 mark_cve_reported(v["cve_id"], v["target"])
@@ -45,8 +49,12 @@ def weekly_job():
     # 2. Get Container Updates
     containers = get_running_containers()
     container_updates = check_image_updates(containers)
-    
-    # 3. Dispatch Digest Email
+
+    # 3. Persist findings so they survive beyond the email inbox
+    for item in os_updates + container_updates:
+        record_update_finding(item)
+
+    # 4. Dispatch Digest Email
     send_email(
         subject="📅 Tars Weekly Update Digest",
         template_name="weekly_digest.html",
