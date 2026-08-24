@@ -30,7 +30,7 @@ NAT punch-through to hope for. LAN players can skip Tailscale and use the
 LoadBalancer IP directly.
 
 Trade-off worth knowing: every external player must install Tailscale and be
-added to the access group below. That's the price for not opening UDP 2456 to
+accept a share invite. That's the price for not opening UDP 2456 to
 the internet.
 
 **Deployment is automatic.** Argo CD (`tars-apps`, in the `argocd` namespace)
@@ -103,37 +103,19 @@ kubectl -n apps exec deploy/valheim -c tailscale -- tailscale ip -4
 Note this IP down — it's used in the access rule below, and again in
 [`CONNECT.md`](./CONNECT.md).
 
-### 3. Invite players to the tailnet and add them to a group
+### 3. Add the access rule
 
-Groups reference tailnet *members*, not people who've just been sent a
-"share this device" link — those are two different Tailscale features. To use
-group-based access, invite each friend as a member first:
-
-**Admin console → Settings → Users/Members → Invite member**, enter their
-email. They'll get an invite email to accept.
-
-Once they've accepted, add their email to the group in the policy file
-(Admin console → Access Controls; create the `groups` block if it doesn't
-exist yet, merging into whatever's already there rather than replacing the
-file):
-
-```jsonc
-"groups": {
-  "group:valheim": ["friend1@example.com", "friend2@example.com"],
-}
-```
-
-Add or remove emails here as your player list changes — the access rule below
-covers everyone in the group automatically, so there's no per-device sharing
-step to repeat for each new friend.
-
-### 4. Add the access rule
+This uses Tailscale's node-**sharing** feature rather than tailnet
+membership — shared users don't count against your plan's member-seat limit,
+which matters once you have more than a couple of friends. The rule grants
+`autogroup:shared` (everyone the node is later shared with, in step 4) access
+to just the two game ports:
 
 If you're using the visual **Access Rules** builder, add a rule with:
 
 | Field | Value |
 | --- | --- |
-| Source | `group:valheim` |
+| Source | `autogroup:shared` |
 | Destination | the tailnet IP from step 2 (e.g. `100.x.y.z`) |
 | Protocol | `UDP` |
 | Port(s) | `2456-2457` |
@@ -145,15 +127,15 @@ directly, the equivalent (Grants syntax) is:
 ```jsonc
 "grants": [
   {
-    "src": ["group:valheim"],
+    "src": ["autogroup:shared"],
     "dst": ["100.x.y.z"],
     "ip":  ["udp:2456-2457"],
   },
 ],
 ```
 
-This is deliberately narrow — the group gets the two Valheim UDP ports on this
-one device and nothing else on the tailnet.
+This is deliberately narrow — shared users get the two Valheim UDP ports on
+this one device and nothing else on the tailnet.
 
 **Caveat:** because the rule targets a literal IP rather than a name, it needs
 to be updated if the node ever re-registers with a new IP (see the
@@ -161,6 +143,14 @@ troubleshooting table below for when that happens). Enabling MagicDNS (Admin
 console → DNS) is still worth doing separately — it doesn't change how this
 rule works, but it gives players a stable name to type instead of the raw IP,
 which is what [`CONNECT.md`](./CONNECT.md) uses.
+
+### 4. Share the node with each friend
+
+**Admin console → Machines → `valheim` → ⋯ → Share…**, then send each friend
+the generated invite link (or use one reusable link for the whole group).
+Accepting the link doesn't make them a tailnet member and doesn't use up a
+seat — it only grants access to the one shared device, scoped further by the
+access rule above to just the game ports.
 
 ### 5. Disable key expiry on the node
 
@@ -182,8 +172,9 @@ and this has to be redone after a fresh bootstrap.)
 
 ### 6. Send the connect guide
 
-Send [`CONNECT.md`](./CONNECT.md) to whoever you added to `group:valheim` in
-step 3, filled in with the actual address from step 2.
+Send [`CONNECT.md`](./CONNECT.md) to each friend along with their share
+invite link from step 4, filled in with the actual server address from
+step 2.
 
 ## Operations
 
@@ -226,8 +217,8 @@ scheduler pick.
 
 | Symptom | Likely cause |
 | --- | --- |
-| Friend can't reach the server at all | They haven't accepted the tailnet invite yet, their email isn't in `group:valheim`, or Tailscale isn't running on their machine |
-| Tailscale connected but the join times out | The access rule's destination IP no longer matches the node's actual IP (see caveat in step 4), or the rule wasn't saved |
+| Friend can't reach the server at all | They haven't accepted the share invite yet, or Tailscale isn't running on their machine |
+| Tailscale connected but the join times out | The access rule's destination IP no longer matches the node's actual IP (see caveat in step 3), or the rule wasn't saved |
 | `tailscale` container `CrashLoopBackOff` with `invalid key: unable to validate API key` in logs | The `TS_AUTHKEY` value in the secret got truncated when it was created — delete and recreate the secret with a freshly generated key, pasted in one motion |
 | Node shows offline after a restart | `valheim-tailscale-state` secret was deleted, or the ServiceAccount lost secret write permission |
 | Status page (`:8080/status.json`) returns a `TimeoutError` | Usually transient right after boot — check container logs for `Connections N ZDOS:...` instead |
