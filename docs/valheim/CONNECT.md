@@ -6,8 +6,7 @@ The server isn't open to the whole internet — it only accepts connections from
 a private network called a "tailnet." That's why there are a couple of setup
 steps before you can play. You'll need:
 
-- The invite email from whoever runs the server (sent to the email address you
-  gave them)
+- A share link from whoever runs the server
 - The server address and password (also from them) — write them here for
   reference:
 
@@ -18,20 +17,13 @@ steps before you can play. You'll need:
 
 ---
 
-## Step 1 — Accept the invite email
+## Step 1 — Create a Tailscale account
 
-Check your email for an invite from Tailscale. Open it and click the button to
-accept.
+Go to **[tailscale.com/start](https://tailscale.com/start)** and sign up using
+**Google, Microsoft, GitHub, or Apple** — whichever you already have. There's
+no new password to create, and the free plan is all you need.
 
-If you don't see it, check spam, or ask whoever runs the server to resend it.
-
-## Step 2 — Create your Tailscale account
-
-The invite link takes you to a sign-up page. Sign up using **Google,
-Microsoft, GitHub, or Apple** — whichever you already have. There's no new
-password to create.
-
-## Step 3 — Install Tailscale
+## Step 2 — Install Tailscale
 
 Go to **[tailscale.com/download](https://tailscale.com/download)**, download
 the version for your computer, and install it. When it opens, sign in with the
@@ -40,12 +32,21 @@ account you just created.
 You'll know it worked when the Tailscale icon (in your system tray, near the
 clock, or in your menu bar at the top of the screen) says **Connected**.
 
+## Step 3 — Accept the share link
+
+Open the share link you were given while signed in to Tailscale, and click
+**Accept**.
+
+This is the step that actually makes the server visible to you — without it,
+Tailscale will say Connected but Valheim still won't be able to reach the
+server.
+
 ## Step 4 — Join the server in Valheim
 
 1. Start Valheim and select your character.
 2. Click **Join Game**.
 3. Click **Join IP** at the bottom of the screen.
-4. Type in the server address you were given (Step 2 in the checklist above),
+4. Type in the server address you were given (see the checklist at the top),
    for example:
 
    ```
@@ -72,10 +73,10 @@ it sometimes disconnects after your computer restarts or an update.
 
 **Tailscale says Connected, but Valheim still can't reach the server**
 
-You may not have finished Step 1. Go to
-[login.tailscale.com/admin/users](https://login.tailscale.com/admin/users) —
-if your name/email isn't listed, the invite wasn't completed. Ask for a new
-invite email.
+You may not have finished Step 3. Ask whoever runs the server to check
+[login.tailscale.com/admin/machines](https://login.tailscale.com/admin/machines)
+for a device named `valheim` and confirm you're listed as someone it's shared
+with. If not, ask for a new share link — they expire after 30 days.
 
 **"Incorrect password" even though you're sure it's right**
 
