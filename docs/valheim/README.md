@@ -29,53 +29,20 @@ the Valheim server address**. No port forwarding, no public exposure, and no
 NAT punch-through to hope for. LAN players can skip Tailscale and use the
 LoadBalancer IP directly.
 
-Trade-off worth knowing: every external player must install Tailscale and accept
-a share invite. That's the price for not opening UDP 2456 to the internet.
+Trade-off worth knowing: every external player must install Tailscale and be
+added to the access group below. That's the price for not opening UDP 2456 to
+the internet.
+
+**Deployment is automatic.** Argo CD (`tars-apps`, in the `argocd` namespace)
+watches this repo's `apps/` directory on `main` with auto-sync enabled. Merging
+a manifest change here is enough — nothing needs to be run by hand except the
+two secrets below, which are deliberately kept out of git.
 
 ## One-time setup
 
-### 1. Tailscale: tag, ACL, and auth key
+### 1. Create the secrets
 
-In the [Tailscale admin console](https://login.tailscale.com/admin):
-
-**a. Define the `tag:game` tag** (Access Controls → edit policy file):
-
-```jsonc
-"tagOwners": {
-  "tag:game": ["autogroup:admin"],
-},
-```
-
-**b. Let shared users reach the game ports.** `autogroup:shared` covers everyone
-you invite without having to list their emails:
-
-```jsonc
-"acls": [
-  // Existing rules stay as they are.
-  {
-    "action": "accept",
-    "src":    ["autogroup:shared"],
-    "dst":    ["tag:game:2456-2457"],
-  },
-],
-```
-
-This is deliberately narrow — shared users get the two Valheim UDP ports on the
-game node and nothing else on the tailnet.
-
-**c. Generate an auth key** (Settings → Keys → Generate auth key):
-
-- Reusable: **yes**
-- Ephemeral: **no** (the node must keep its identity across pod restarts)
-- Pre-approved: **yes** (if device approval is on)
-- Tags: **`tag:game`**
-
-Also confirm **MagicDNS** is enabled (Admin console → DNS) so the server gets
-a vanity hostname like `valheim.<tailnet>.ts.net` instead of a raw IP.
-
-### 2. Create the secrets
-
-Neither secret is in git. Create both in the `apps` namespace:
+Neither secret is in git — create both in the `apps` namespace:
 
 ```sh
 kubectl create secret generic valheim-tailscale-auth \
@@ -90,20 +57,31 @@ kubectl create secret generic valheim-server \
   --from-literal=ADMINLIST_IDS='76561198000000000'
 ```
 
+Get the `TS_AUTHKEY` value from the Tailscale admin console: **Settings → Keys
+→ Generate auth key**, with:
+
+- Reusable: **yes**
+- Ephemeral: **no** (the node must keep its identity across pod restarts)
+- Pre-approved: **yes** (if device approval is on)
+
 Notes:
 
+- Paste each `--from-literal` value in one motion rather than typing it —
+  a key or password that gets cut off mid-entry (e.g. hitting enter early in a
+  terminal) creates a secret that *looks* fine but fails validation once the
+  container tries to use it. If the `tailscale` container ends up crash-looping
+  with `invalid key: unable to validate API key` in its logs, this is almost
+  always why — delete the secret and recreate it carefully.
 - `SERVER_PASS` must be at least 5 characters and cannot appear in `SERVER_NAME`.
 - `WORLD_NAME` is the world *filename*. Changing it later generates a brand new
   world rather than renaming the existing one.
 - `ADMINLIST_IDS` is space-separated SteamID64 values. Find yours at
   [steamid.io](https://steamid.io). Admins get `devcommands`, kick, and ban.
 
-### 3. Deploy
+Once both secrets exist, the pod (already deployed by Argo CD) will pick them
+up and restart on its own within a minute or so — no manual redeploy needed.
 
-```sh
-kubectl apply -f apps/valheim.yaml
-kubectl -n apps rollout status deploy/valheim
-```
+### 2. Approve the device and find its tailnet IP
 
 First boot downloads ~2 GB of server files and takes several minutes. Watch it:
 
@@ -111,33 +89,82 @@ First boot downloads ~2 GB of server files and takes several minutes. Watch it:
 kubectl -n apps logs -f deploy/valheim -c valheim
 ```
 
-The server is up once the log reads `Game server connected`.
+The Valheim server itself is up once the log shows periodic `Connections N
+ZDOS:...` lines.
 
-### 4. Find the server address
-
-With [MagicDNS](https://tailscale.com/kb/1081/magicdns) enabled on the tailnet
-(Admin console → DNS → MagicDNS), the pod's `TS_HOSTNAME=valheim` gives it a
-stable vanity name instead of a raw IP:
-
-```
-valheim.<your-tailnet>.ts.net
-```
-
-Find the exact name in the admin console under **Machines**, or from inside
-the cluster:
+The `tailscale` sidecar registers as a new device called `valheim` — if device
+approval is enabled on your tailnet, approve it in the admin console under
+**Machines** before it gets an IP. Once approved, find its address:
 
 ```sh
-kubectl -n apps exec deploy/valheim -c tailscale -- tailscale status --self --json | grep DNSName
+kubectl -n apps exec deploy/valheim -c tailscale -- tailscale ip -4
 ```
 
-That name plus port `2456` is what players enter. It's stable across restarts
-because the node state is persisted in the `valheim-tailscale-state` secret,
-and it beats handing out a raw `100.x.y.z` address. If MagicDNS is ever off,
-`tailscale ip -4` still gives the underlying IP as a fallback.
+Note this IP down — it's used in the access rule below, and again in
+[`CONNECT.md`](./CONNECT.md).
+
+### 3. Invite players to the tailnet and add them to a group
+
+Groups reference tailnet *members*, not people who've just been sent a
+"share this device" link — those are two different Tailscale features. To use
+group-based access, invite each friend as a member first:
+
+**Admin console → Settings → Users/Members → Invite member**, enter their
+email. They'll get an invite email to accept.
+
+Once they've accepted, add their email to the group in the policy file
+(Admin console → Access Controls; create the `groups` block if it doesn't
+exist yet, merging into whatever's already there rather than replacing the
+file):
+
+```jsonc
+"groups": {
+  "group:valheim": ["friend1@example.com", "friend2@example.com"],
+}
+```
+
+Add or remove emails here as your player list changes — the access rule below
+covers everyone in the group automatically, so there's no per-device sharing
+step to repeat for each new friend.
+
+### 4. Add the access rule
+
+If you're using the visual **Access Rules** builder, add a rule with:
+
+| Field | Value |
+| --- | --- |
+| Source | `group:valheim` |
+| Destination | the tailnet IP from step 2 (e.g. `100.x.y.z`) |
+| Protocol | `UDP` |
+| Port(s) | `2456-2457` |
+
+The destination field in the visual builder only accepts IPs, tags, or
+groups — not a device's plain name. If you'd rather edit the policy file
+directly, the equivalent (Grants syntax) is:
+
+```jsonc
+"grants": [
+  {
+    "src": ["group:valheim"],
+    "dst": ["100.x.y.z"],
+    "ip":  ["udp:2456-2457"],
+  },
+],
+```
+
+This is deliberately narrow — the group gets the two Valheim UDP ports on this
+one device and nothing else on the tailnet.
+
+**Caveat:** because the rule targets a literal IP rather than a name, it needs
+to be updated if the node ever re-registers with a new IP (see the
+troubleshooting table below for when that happens). Enabling MagicDNS (Admin
+console → DNS) is still worth doing separately — it doesn't change how this
+rule works, but it gives players a stable name to type instead of the raw IP,
+which is what [`CONNECT.md`](./CONNECT.md) uses.
 
 ### 5. Disable key expiry on the node
 
-The auth key from step 1c is only used once, to bootstrap the node's first
+The auth key from step 1 is only used once, to bootstrap the node's first
 join — after that the sidecar persists its identity in the
 `valheim-tailscale-state` secret and never touches the auth key again. What
 *does* matter long-term is the node's own session, which by default expires
@@ -153,11 +180,10 @@ regardless of the original auth key's own expiry. (If the
 `valheim-tailscale-state` secret is ever deleted, the node loses its identity
 and this has to be redone after a fresh bootstrap.)
 
-### 6. Share the node with friends
+### 6. Send the connect guide
 
-Admin console → **Machines** → `valheim` → **⋯** → **Share…**. Send each friend
-an invite link (or use a reusable link for the group). Then send them
-[`CONNECT.md`](./CONNECT.md).
+Send [`CONNECT.md`](./CONNECT.md) to whoever you added to `group:valheim` in
+step 3, filled in with the actual address from step 2.
 
 ## Operations
 
@@ -168,6 +194,11 @@ and uptime as JSON:
 kubectl -n apps port-forward deploy/valheim 8080:8080
 curl -s localhost:8080/status.json
 ```
+
+This endpoint is occasionally flaky right after a restart (a
+`TimeoutError('timed out')` in the response while the game process finishes
+booting) — check the container logs for `Connections N ZDOS:...` lines as the
+more reliable signal that the server is actually up.
 
 **Backups.** The container snapshots the world every 6 hours to
 `/backups/valheim` on the NFS share (`nfs-media-pvc` → `/mnt/user/data`),
@@ -195,12 +226,13 @@ scheduler pick.
 
 | Symptom | Likely cause |
 | --- | --- |
-| Friend can't reach the server at all | They haven't accepted the share invite, or Tailscale isn't running on their machine |
-| Tailscale connected but the join times out | ACL doesn't allow `autogroup:shared` → `tag:game:2456-2457` |
-| Sidecar `CrashLoopBackOff` | Auth key expired or was ephemeral; regenerate and update the secret |
+| Friend can't reach the server at all | They haven't accepted the tailnet invite yet, their email isn't in `group:valheim`, or Tailscale isn't running on their machine |
+| Tailscale connected but the join times out | The access rule's destination IP no longer matches the node's actual IP (see caveat in step 4), or the rule wasn't saved |
+| `tailscale` container `CrashLoopBackOff` with `invalid key: unable to validate API key` in logs | The `TS_AUTHKEY` value in the secret got truncated when it was created — delete and recreate the secret with a freshly generated key, pasted in one motion |
 | Node shows offline after a restart | `valheim-tailscale-state` secret was deleted, or the ServiceAccount lost secret write permission |
+| Status page (`:8080/status.json`) returns a `TimeoutError` | Usually transient right after boot — check container logs for `Connections N ZDOS:...` instead |
 | "Incorrect password" with the right password | Client cached an old world; have them clear the entry and re-add it |
-| Server not in the friend's server list | Expected — `SERVER_PUBLIC=false`. Join by IP |
+| Server not in the friend's server list | Expected — `SERVER_PUBLIC=false`. Join by IP/name directly |
 
 ## Deliberately not done
 

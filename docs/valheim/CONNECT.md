@@ -1,101 +1,113 @@
 # How to join the Valheim server
 
-You'll do this once, and it takes about five minutes. After that, joining is two
-clicks.
+This takes about five minutes, one time. After that, joining is two clicks.
 
-The server lives on a private network called a **tailnet** instead of being open
-to the internet. That means no one can find or attack it, but it also means you
-need a small piece of software (Tailscale) to see it. Tailscale is free, doesn't
-route your normal internet traffic, and you only need it running while you play.
+The server isn't open to the whole internet — it only accepts connections from
+a private network called a "tailnet." That's why there are a couple of setup
+steps before you can play. You'll need:
+
+- The invite email from whoever runs the server (sent to the email address you
+  gave them)
+- The server address and password (also from them) — write them here for
+  reference:
+
+  ```
+  Server address: ______________________________
+  Server password: _____________________________
+  ```
 
 ---
 
-## Step 1 — Make a Tailscale account
+## Step 1 — Accept the invite email
 
-Go to **[tailscale.com/start](https://tailscale.com/start)** and sign up with
-Google, Microsoft, GitHub, or Apple. There's no password to create and the free
-plan is all you need.
+Check your email for an invite from Tailscale. Open it and click the button to
+accept.
 
-> You need your own account even though you're joining someone else's server —
-> that's just how the share works.
+If you don't see it, check spam, or ask whoever runs the server to resend it.
 
-## Step 2 — Install Tailscale
+## Step 2 — Create your Tailscale account
 
-Download it for your machine from
-**[tailscale.com/download](https://tailscale.com/download)**, install, and sign
-in with the account from Step 1.
+The invite link takes you to a sign-up page. Sign up using **Google,
+Microsoft, GitHub, or Apple** — whichever you already have. There's no new
+password to create.
 
-You'll know it worked when the Tailscale icon in your system tray / menu bar
-says **Connected**.
+## Step 3 — Install Tailscale
 
-## Step 3 — Accept the share invite
+Go to **[tailscale.com/download](https://tailscale.com/download)**, download
+the version for your computer, and install it. When it opens, sign in with the
+account you just created.
 
-You'll get an invite link. Open it while signed in to Tailscale and click
-**Accept**.
+You'll know it worked when the Tailscale icon (in your system tray, near the
+clock, or in your menu bar at the top of the screen) says **Connected**.
 
-This is what makes the game server visible to you. Without it, everything else
-looks right but nothing shows up.
+## Step 4 — Join the server in Valheim
 
-## Step 4 — Join in Valheim
-
-1. Start Valheim and pick your character.
+1. Start Valheim and select your character.
 2. Click **Join Game**.
-3. Click the **Join IP** button at the bottom.
-4. Enter the address you were given, which looks like:
+3. Click **Join IP** at the bottom of the screen.
+4. Type in the server address you were given (Step 2 in the checklist above),
+   for example:
 
    ```
-   valheim.<tailnet-name>.ts.net:2456
+   100.x.y.z:2456
    ```
 
-5. Enter the server password when prompted.
+5. Type in the server password when asked.
 
-The server won't appear in the public "Community" server list — that's on
-purpose. Always use **Join IP**.
+You will **not** find this server by browsing the public server list — that's
+expected. Always connect using **Join IP**.
 
-> **Tip:** After joining once, the server shows up under **Favorites**, so
-> future sessions are just: make sure Tailscale says Connected → Join Game →
-> Favorites.
+> **After this first time:** the server will show up under **Favorites** in
+> Valheim, so future sessions are just: check Tailscale says Connected → open
+> Valheim → click the server under Favorites.
 
 ---
 
 ## If something doesn't work
 
-**"Failed to connect" / it just spins**
+**Nothing happens / it just spins on "Connecting..."**
 
-Check that Tailscale says **Connected** in your tray or menu bar. It sometimes
-signs out after a reboot or an OS update.
+Check that Tailscale says **Connected**. Click the Tailscale icon to check —
+it sometimes disconnects after your computer restarts or an update.
 
-**Tailscale is connected but Valheim still can't find it**
+**Tailscale says Connected, but Valheim still can't reach the server**
 
-Confirm you actually accepted the invite from Step 3 — open
-[login.tailscale.com/admin/machines](https://login.tailscale.com/admin/machines)
-and look for a machine named `valheim`. If it isn't listed, ask for a fresh
-invite link (they expire after 30 days).
+You may not have finished Step 1. Go to
+[login.tailscale.com/admin/users](https://login.tailscale.com/admin/users) —
+if your name/email isn't listed, the invite wasn't completed. Ask for a new
+invite email.
 
-**"Incorrect password"**
+**"Incorrect password" even though you're sure it's right**
 
-Delete the server from your Favorites, re-add it with **Join IP**, and type the
-password again — Valheim caches old credentials aggressively.
+Remove the server from your Favorites list, add it again with **Join IP**,
+and type the password fresh — Valheim sometimes reuses an old saved password
+instead of the new one you typed.
 
-**"Version mismatch" or you get kicked immediately**
+**"Version mismatch" or you get disconnected immediately after joining**
 
-Valheim updated. Let Steam update your game and try again; if it persists, the
-server needs the same update and someone will need to bump it.
+Your copy of Valheim needs an update. Let Steam finish updating and try again.
+If it still happens, the server itself needs updating — let whoever runs it
+know.
 
-**Still stuck?** Send whoever runs the server: what step you got to, whether
-Tailscale says Connected, and the exact error text.
+**Still stuck?**
+
+Message whoever runs the server with:
+1. Which step you got stuck on
+2. Whether Tailscale says Connected or not
+3. The exact wording of any error message
 
 ---
 
-## FAQ
+## Common questions
 
-**Does Tailscale slow down my internet or see my traffic?**
-No. It only handles traffic to machines on the tailnet — the game server, in
-this case. Everything else goes out your normal connection untouched.
+**Does this slow down my internet, or let the server owner see my traffic?**
+No. Tailscale only carries traffic to the one game server — everything else on
+your computer works exactly as it did before.
 
-**Can I see other machines on their network?**
-No. The share gives you exactly one machine — the game server — on two ports.
-Nothing else is visible to you, and your machine isn't visible to them.
+**Can I see or reach anything else on their network?**
+No. You only get access to the one server, on the two ports the game needs.
+Nothing else on their network is visible to you, and your computer isn't
+visible to anyone else on their network either.
 
-**Do I have to leave Tailscale running all the time?**
-Only while you're playing. Quit it whenever you like.
+**Do I need to keep Tailscale running all the time?**
+No — only while you want to play. You can quit it the rest of the time.
