@@ -44,7 +44,7 @@ looks right but nothing shows up.
 4. Enter the address you were given, which looks like:
 
    ```
-   100.x.y.z:2456
+   valheim.<tailnet-name>.ts.net:2456
    ```
 
 5. Enter the server password when prompted.
