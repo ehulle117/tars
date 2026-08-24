@@ -1,0 +1,242 @@
+# Valheim dedicated server
+#
+# Networking: a Tailscale sidecar shares the pod's network namespace, so the
+# tailnet IP for this pod IS the Valheim server address. Friends outside the LAN
+# connect by having the "valheim" node shared to them in Tailscale.
+#
+# See docs/valheim/README.md for setup and docs/valheim/CONNECT.md for players.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: valheim-tailscale
+  namespace: apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: valheim-tailscale
+  namespace: apps
+rules:
+  # Lets the sidecar persist its tailnet node state so the node identity and
+  # tailnet IP survive pod restarts.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: valheim-tailscale
+  namespace: apps
+subjects:
+  - kind: ServiceAccount
+    name: valheim-tailscale
+    namespace: apps
+roleRef:
+  kind: Role
+  name: valheim-tailscale
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: valheim-config-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Valheim re-downloads ~2GB of server files on every cold start without this.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: valheim-server-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valheim
+  namespace: apps
+  labels:
+    app: valheim
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: valheim
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: valheim
+    spec:
+      serviceAccountName: valheim-tailscale
+      containers:
+        - name: valheim
+          image: ghcr.io/lloesche/valheim-server:latest
+          env:
+            - name: SERVER_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: valheim-server
+                  key: SERVER_NAME
+            - name: WORLD_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: valheim-server
+                  key: WORLD_NAME
+            - name: SERVER_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: valheim-server
+                  key: SERVER_PASS
+            - name: ADMINLIST_IDS
+              valueFrom:
+                secretKeyRef:
+                  name: valheim-server
+                  key: ADMINLIST_IDS
+            - name: SERVER_PORT
+              value: "2456"
+            # Not listed in the public browser -- the server is only reachable
+            # over the tailnet, so a public listing would just be dead entries.
+            - name: SERVER_PUBLIC
+              value: "false"
+            - name: TZ
+              value: "America/New_York"
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: BACKUPS
+              value: "true"
+            - name: BACKUPS_CRON
+              value: "0 */6 * * *"
+            - name: BACKUPS_MAX_AGE
+              value: "14"
+            - name: BACKUPS_DIRECTORY
+              value: "/backups/valheim"
+            # Check for server updates every 15 min; restarts only when players
+            # are not connected unless the restart is forced.
+            - name: UPDATE_CRON
+              value: "*/15 * * * *"
+            - name: RESTART_IF_IDLE
+              value: "true"
+            - name: STATUS_HTTP
+              value: "true"
+            - name: STATUS_HTTP_PORT
+              value: "8080"
+          ports:
+            - name: game
+              containerPort: 2456
+              protocol: UDP
+            - name: query
+              containerPort: 2457
+              protocol: UDP
+            - name: status
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            capabilities:
+              add: ["SYS_NICE"]
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+            limits:
+              memory: 8Gi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: server
+              mountPath: /opt/valheim
+            - name: media
+              mountPath: /backups
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 300
+            periodSeconds: 60
+            failureThreshold: 5
+
+        - name: tailscale
+          image: ghcr.io/tailscale/tailscale:latest
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: valheim-tailscale-auth
+                  key: TS_AUTHKEY
+            - name: TS_KUBE_SECRET
+              value: valheim-tailscale-state
+            - name: TS_HOSTNAME
+              value: valheim
+            # Kernel networking. Userspace mode proxies TCP well but is a poor
+            # fit for a latency-sensitive UDP game server.
+            - name: TS_USERSPACE
+              value: "false"
+            - name: TS_EXTRA_ARGS
+              value: "--advertise-tags=tag:game"
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: dev-net-tun
+              mountPath: /dev/net/tun
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: valheim-config-pvc
+        - name: server
+          persistentVolumeClaim:
+            claimName: valheim-server-pvc
+        - name: media
+          persistentVolumeClaim:
+            claimName: nfs-media-pvc
+        - name: dev-net-tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
+---
+# LAN access + the status page. External players go over Tailscale instead.
+apiVersion: v1
+kind: Service
+metadata:
+  name: valheim-svc
+  namespace: apps
+spec:
+  type: LoadBalancer
+  selector:
+    app: valheim
+  ports:
+    - name: game
+      protocol: UDP
+      port: 2456
+      targetPort: 2456
+    - name: query
+      protocol: UDP
+      port: 2457
+      targetPort: 2457
+    - name: status
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
