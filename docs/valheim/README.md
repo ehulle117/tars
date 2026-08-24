@@ -70,6 +70,9 @@ game node and nothing else on the tailnet.
 - Pre-approved: **yes** (if device approval is on)
 - Tags: **`tag:game`**
 
+Also confirm **MagicDNS** is enabled (Admin console → DNS) so the server gets
+a vanity hostname like `valheim.<tailnet>.ts.net` instead of a raw IP.
+
 ### 2. Create the secrets
 
 Neither secret is in git. Create both in the `apps` namespace:
@@ -110,15 +113,27 @@ kubectl -n apps logs -f deploy/valheim -c valheim
 
 The server is up once the log reads `Game server connected`.
 
-### 4. Find the tailnet address
+### 4. Find the server address
 
-```sh
-kubectl -n apps exec deploy/valheim -c tailscale -- tailscale ip -4
+With [MagicDNS](https://tailscale.com/kb/1081/magicdns) enabled on the tailnet
+(Admin console → DNS → MagicDNS), the pod's `TS_HOSTNAME=valheim` gives it a
+stable vanity name instead of a raw IP:
+
+```
+valheim.<your-tailnet>.ts.net
 ```
 
-That `100.x.y.z` address plus port `2456` is what players enter. It is stable
-across restarts because the node state is persisted in the
-`valheim-tailscale-state` secret.
+Find the exact name in the admin console under **Machines**, or from inside
+the cluster:
+
+```sh
+kubectl -n apps exec deploy/valheim -c tailscale -- tailscale status --self --json | grep DNSName
+```
+
+That name plus port `2456` is what players enter. It's stable across restarts
+because the node state is persisted in the `valheim-tailscale-state` secret,
+and it beats handing out a raw `100.x.y.z` address. If MagicDNS is ever off,
+`tailscale ip -4` still gives the underlying IP as a fallback.
 
 ### 5. Share the node with friends
 
