@@ -135,7 +135,25 @@ because the node state is persisted in the `valheim-tailscale-state` secret,
 and it beats handing out a raw `100.x.y.z` address. If MagicDNS is ever off,
 `tailscale ip -4` still gives the underlying IP as a fallback.
 
-### 5. Share the node with friends
+### 5. Disable key expiry on the node
+
+The auth key from step 1c is only used once, to bootstrap the node's first
+join — after that the sidecar persists its identity in the
+`valheim-tailscale-state` secret and never touches the auth key again. What
+*does* matter long-term is the node's own session, which by default expires
+(~180 days) and would otherwise kick the server off the tailnet until someone
+re-authenticates it interactively.
+
+Once the pod has registered and shows up in the admin console, disable that:
+
+**Admin console → Machines → `valheim` → ⋯ → Disable key expiry**
+
+This is a one-time step. After it's set, the node never needs re-auth again,
+regardless of the original auth key's own expiry. (If the
+`valheim-tailscale-state` secret is ever deleted, the node loses its identity
+and this has to be redone after a fresh bootstrap.)
+
+### 6. Share the node with friends
 
 Admin console → **Machines** → `valheim` → **⋯** → **Share…**. Send each friend
 an invite link (or use a reusable link for the group). Then send them
