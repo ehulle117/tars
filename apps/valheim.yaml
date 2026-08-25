@@ -217,7 +217,15 @@ spec:
             path: /dev/net/tun
             type: CharDevice
 ---
-# LAN access + the status page. External players go over Tailscale instead.
+# LAN game access. External players go over Tailscale instead.
+#
+# Deliberately no status (8080) port here: exposing it via LoadBalancer would
+# ask k3s's per-node LB pod to claim host port 8080, which is already taken by
+# arm-svc's LoadBalancer -- since that pod needs every requested host port
+# free to schedule at all, the clash blocked 2456/2457 from being published
+# too, even though those two are free on their own. Reach the status page via
+# `kubectl -n apps port-forward deploy/valheim 8080:8080` instead (see
+# docs/valheim/README.md).
 apiVersion: v1
 kind: Service
 metadata:
@@ -236,7 +244,3 @@ spec:
       protocol: UDP
       port: 2457
       targetPort: 2457
-    - name: status
-      protocol: TCP
-      port: 8080
-      targetPort: 8080
