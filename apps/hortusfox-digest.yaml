@@ -24,7 +24,7 @@ data:
 
     data = urllib.parse.urlencode({
         "token": HORTUSFOX_TOKEN,
-        "done": "false",
+        "done": "0",
         "limit": "200",
     }).encode()
     req = urllib.request.Request(f"{HORTUSFOX_URL}/api/tasks/fetch", data=data, method="POST")
