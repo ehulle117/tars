@@ -1,0 +1,34 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hortusfox-recurring-tasks
+  namespace: apps
+spec:
+  schedule: "*/15 * * * *" # Every 15 minutes
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: hortusfox-cron
+            image: curlimages/curl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              BASE="http://hortusfox-svc.apps.svc.cluster.local:8081"
+              curl -fsS "$BASE/cronjob/tasks/recurring?cronpw=$CRONJOB_PW"
+              curl -fsS "$BASE/cronjob/tasks/overdue?cronpw=$CRONJOB_PW"
+              curl -fsS "$BASE/cronjob/tasks/tomorrow?cronpw=$CRONJOB_PW"
+              curl -fsS "$BASE/cronjob/calendar/reminder?cronpw=$CRONJOB_PW"
+              echo "HortusFox cronjobs triggered."
+            env:
+            - name: CRONJOB_PW
+              valueFrom:
+                secretKeyRef:
+                  name: hortusfox-secrets
+                  key: CRONJOB_PW
+          restartPolicy: OnFailure
