@@ -1,0 +1,157 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hortusfox-db-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hortusfox-app-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hortusfox-db
+  namespace: apps
+  labels:
+    app: hortusfox-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hortusfox-db
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: hortusfox-db
+    spec:
+      containers:
+        - name: mariadb
+          image: mariadb:latest
+          env:
+            - name: MARIADB_DATABASE
+              value: "hortusfox"
+            - name: MARIADB_USER
+              value: "hortusfox"
+          envFrom:
+            - secretRef:
+                name: hortusfox-secrets
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: db
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: db
+          persistentVolumeClaim:
+            claimName: hortusfox-db-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hortusfox-db-svc
+  namespace: apps
+spec:
+  type: ClusterIP
+  selector:
+    app: hortusfox-db
+  ports:
+    - protocol: TCP
+      port: 3306
+      targetPort: 3306
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hortusfox
+  namespace: apps
+  labels:
+    app: hortusfox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hortusfox
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: hortusfox
+    spec:
+      containers:
+        - name: hortusfox
+          image: ghcr.io/danielbrendel/hortusfox-web:latest
+          env:
+            - name: APP_TIMEZONE
+              value: "America/New_York"
+            - name: DB_HOST
+              value: "hortusfox-db-svc.apps.svc.cluster.local"
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_DATABASE
+              value: "hortusfox"
+            - name: DB_USERNAME
+              value: "hortusfox"
+            - name: DB_CHARSET
+              value: "utf8mb4"
+          envFrom:
+            - secretRef:
+                name: hortusfox-secrets
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: app-data
+              mountPath: /var/www/html/public/img
+              subPath: img
+            - name: app-data
+              mountPath: /var/www/html/public/attachments
+              subPath: attachments
+            - name: app-data
+              mountPath: /var/www/html/app/logs
+              subPath: logs
+            - name: app-data
+              mountPath: /var/www/html/public/backup
+              subPath: backup
+            - name: app-data
+              mountPath: /var/www/html/public/themes
+              subPath: themes
+            - name: app-data
+              mountPath: /var/www/html/app/migrations
+              subPath: migrations
+      volumes:
+        - name: app-data
+          persistentVolumeClaim:
+            claimName: hortusfox-app-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hortusfox-svc
+  namespace: apps
+spec:
+  type: LoadBalancer
+  selector:
+    app: hortusfox
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 80
