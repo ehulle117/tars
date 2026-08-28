@@ -30,6 +30,8 @@ spec:
       labels:
         app: deluge
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-case
       containers:
         - name: deluge
           image: binhex/arch-delugevpn:2.2.0-1-04

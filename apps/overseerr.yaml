@@ -30,6 +30,8 @@ spec:
       labels:
         app: overseerr
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-case
       containers:
         - name: overseerr
           image: lscr.io/linuxserver/overseerr:latest

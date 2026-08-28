@@ -30,6 +30,8 @@ spec:
       labels:
         app: sonarr
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-case
       containers:
         - name: sonarr
           image: lscr.io/linuxserver/sonarr:latest

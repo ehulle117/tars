@@ -30,6 +30,8 @@ spec:
       labels:
         app: lidarr
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-case
       containers:
         - name: lidarr
           image: lscr.io/linuxserver/lidarr:latest

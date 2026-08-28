@@ -1,19 +1,19 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: tars-appdata-backup
+  name: case-worker-appdata-backup
   namespace: apps
 spec:
   concurrencyPolicy: Allow
   failedJobsHistoryLimit: 3
   successfulJobsHistoryLimit: 3
-  schedule: "0 3 * * *"
+  schedule: "15 3 * * *"
   jobTemplate:
     spec:
       template:
         spec:
           nodeSelector:
-            kubernetes.io/hostname: tars
+            kubernetes.io/hostname: k3s-worker-case
           restartPolicy: OnFailure
           containers:
             - name: backup
@@ -23,13 +23,13 @@ spec:
                 - -c
                 - |
                   set -e
-                  echo "Starting backup of k3s local-path storage on tars..."
+                  echo "Starting backup of k3s local-path storage on k3s-worker-case..."
                   DATE=$(date +%Y-%m-%d_%H-%M-%S)
-                  mkdir -p /destination/tars_k8s_appdata
-                  tar -czf /destination/tars_k8s_appdata/backup_${DATE}.tar.gz -C /source .
+                  mkdir -p /destination/case_worker_k8s_appdata
+                  tar -czf /destination/case_worker_k8s_appdata/backup_${DATE}.tar.gz -C /source .
                   echo "Backup completed successfully: backup_${DATE}.tar.gz"
                   echo "Cleaning up backups older than 7 days..."
-                  find /destination/tars_k8s_appdata -name "backup_*.tar.gz" -mtime +7 -delete
+                  find /destination/case_worker_k8s_appdata -name "backup_*.tar.gz" -mtime +7 -delete
                   echo "Cleanup complete."
               volumeMounts:
                 - name: source-data
