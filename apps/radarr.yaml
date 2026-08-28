@@ -30,6 +30,8 @@ spec:
       labels:
         app: radarr
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-case
       containers:
         - name: radarr
           image: lscr.io/linuxserver/radarr:latest

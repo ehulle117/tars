@@ -30,6 +30,8 @@ spec:
       labels:
         app: readarr
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-case
       containers:
         - name: readarr
           image: binhex/arch-readarr:latest

@@ -30,6 +30,8 @@ spec:
       labels:
         app: fetcharr
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-case
       containers:
         - name: fetcharr
           image: egg82/fetcharr:latest
