@@ -1,0 +1,290 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: arr-queue-check-script
+  namespace: apps
+data:
+  check.py: |
+    import html
+    import json
+    import os
+    import smtplib
+    import ssl
+    import urllib.request
+    from datetime import datetime, timezone
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    STUCK_STATES = {"importPending", "importFailed", "failed"}
+    STUCK_AGE_HOURS = 24
+
+    APPS = [
+        {"name": "Radarr", "host": "radarr-svc.apps.svc.cluster.local", "port": 7878, "api": "v3", "key": os.environ["RADARR_API_KEY"]},
+        {"name": "Sonarr", "host": "sonarr-svc.apps.svc.cluster.local", "port": 8989, "api": "v3", "key": os.environ["SONARR_API_KEY"]},
+        {"name": "Lidarr", "host": "lidarr-svc.apps.svc.cluster.local", "port": 8686, "api": "v1", "key": os.environ["LIDARR_API_KEY"]},
+        {"name": "Readarr", "host": "readarr-svc.apps.svc.cluster.local", "port": 8787, "api": "v1", "key": os.environ["READARR_API_KEY"]},
+    ]
+
+    PROWLARR_HOST = "prowlarr-svc.apps.svc.cluster.local"
+    PROWLARR_PORT = 9696
+    PROWLARR_KEY = os.environ["PROWLARR_API_KEY"]
+    INDEXER_STALE_DAYS = 3
+
+    SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+    SMTP_USERNAME = os.environ["SMTP_USERNAME"]
+    SMTP_PASSWORD = os.environ["SMTP_PASSWORD"]
+    MAIL_TO = os.environ["MAIL_TO"]
+
+
+    def api_get(host, port, path, api_key, timeout=15):
+        req = urllib.request.Request(f"http://{host}:{port}{path}", headers={"X-Api-Key": api_key})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+
+
+    def hours_since(iso_ts):
+        added = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - added).total_seconds() / 3600
+
+
+    # sections: list of {"app": str, "stuck": [...], "health": [...], "error": str|None}
+    sections = []
+    prowlarr_stale = []
+    prowlarr_error = None
+
+    for app in APPS:
+        section = {"app": app["name"], "stuck": [], "health": [], "error": None}
+        sections.append(section)
+
+        try:
+            queue = api_get(app["host"], app["port"], f"/api/{app['api']}/queue?pageSize=100", app["key"])
+        except Exception as e:
+            section["error"] = f"couldn't fetch queue: {e}"
+            continue
+
+        for rec in queue.get("records", []):
+            state = rec.get("trackedDownloadState")
+            if state not in STUCK_STATES:
+                continue
+            age_h = hours_since(rec["added"]) if rec.get("added") else 0
+            if age_h < STUCK_AGE_HOURS:
+                continue
+            msgs = rec.get("statusMessages") or []
+            err = "; ".join(m.get("title", "") for m in msgs) or state
+            section["stuck"].append({
+                "title": rec.get("title", "unknown"),
+                "indexer": rec.get("indexer", "unknown"),
+                "age_h": age_h,
+                "state": state,
+                "error": err,
+            })
+
+        try:
+            health = api_get(app["host"], app["port"], f"/api/{app['api']}/health", app["key"])
+        except Exception as e:
+            section["error"] = f"couldn't fetch health: {e}"
+            continue
+
+        for h in health:
+            if h.get("type") in ("warning", "error"):
+                section["health"].append({"level": h["type"], "message": h.get("message", "")})
+
+    try:
+        statuses = api_get(PROWLARR_HOST, PROWLARR_PORT, "/api/v1/indexerstatus", PROWLARR_KEY)
+        indexers = {i["id"]: i["name"] for i in api_get(PROWLARR_HOST, PROWLARR_PORT, "/api/v1/indexer", PROWLARR_KEY)}
+        for s in statuses:
+            initial = s.get("initialFailure")
+            if not initial:
+                continue
+            days = hours_since(initial) / 24
+            if days >= INDEXER_STALE_DAYS:
+                prowlarr_stale.append({
+                    "name": indexers.get(s["indexerId"], f"id={s['indexerId']}"),
+                    "since": initial[:10],
+                    "days": days,
+                })
+    except Exception as e:
+        prowlarr_error = str(e)
+
+    has_issues = (
+        any(s["stuck"] or s["health"] or s["error"] for s in sections)
+        or prowlarr_stale
+        or prowlarr_error
+    )
+
+    if not has_issues:
+        print("All queues clean, no long-term indexer failures. Skipping email.")
+    else:
+        issue_count = sum(len(s["stuck"]) + len(s["health"]) + (1 if s["error"] else 0) for s in sections)
+        issue_count += len(prowlarr_stale) + (1 if prowlarr_error else 0)
+
+        COLORS = {"error": "#c0392b", "warning": "#b8860b", "ok": "#2e7d32", "muted": "#6b7280"}
+
+        def esc(s):
+            return html.escape(str(s))
+
+        def badge(text, color):
+            return (
+                f'<span style="display:inline-block;padding:2px 8px;border-radius:10px;'
+                f'font-size:12px;font-weight:600;color:#fff;background:{color};">{esc(text)}</span>'
+            )
+
+        html_parts = [
+            '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;max-width:640px;">',
+            '<h2 style="margin:0 0 4px;">Morning *arr stack check</h2>',
+            f'<p style="margin:0 0 20px;color:{COLORS["muted"]};font-size:13px;">'
+            f'{issue_count} issue(s) found across the media stack</p>',
+        ]
+
+        for section in sections:
+            rows = section["stuck"] or section["health"] or section["error"]
+            if not rows:
+                continue
+            html_parts.append(
+                f'<h3 style="margin:20px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px;">{esc(section["app"])}</h3>'
+            )
+            if section["error"]:
+                html_parts.append(
+                    f'<p style="margin:4px 0;">{badge("ERROR", COLORS["error"])} {esc(section["error"])}</p>'
+                )
+            for item in section["stuck"]:
+                html_parts.append(
+                    '<div style="margin:8px 0;padding:8px 12px;background:#f9fafb;border-left:3px solid '
+                    f'{COLORS["error"]};border-radius:4px;">'
+                    f'<div style="font-weight:600;">{esc(item["title"])}</div>'
+                    f'<div style="font-size:13px;color:{COLORS["muted"]};margin-top:2px;">'
+                    f'{esc(item["indexer"])} &middot; stuck {item["age_h"]:.0f}h &middot; {esc(item["state"])}</div>'
+                    f'<div style="font-size:13px;margin-top:4px;">{esc(item["error"])}</div>'
+                    '</div>'
+                )
+            for h in section["health"]:
+                color = COLORS["error"] if h["level"] == "error" else COLORS["warning"]
+                html_parts.append(
+                    f'<p style="margin:6px 0;">{badge(h["level"].upper(), color)} {esc(h["message"])}</p>'
+                )
+
+        if prowlarr_stale or prowlarr_error:
+            html_parts.append(
+                '<h3 style="margin:20px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px;">Prowlarr</h3>'
+            )
+            if prowlarr_error:
+                html_parts.append(
+                    f'<p style="margin:4px 0;">{badge("ERROR", COLORS["error"])} couldn\'t fetch indexer status: {esc(prowlarr_error)}</p>'
+                )
+            for idx in prowlarr_stale:
+                html_parts.append(
+                    '<div style="margin:8px 0;padding:8px 12px;background:#f9fafb;border-left:3px solid '
+                    f'{COLORS["warning"]};border-radius:4px;">'
+                    f'<div style="font-weight:600;">{esc(idx["name"])}</div>'
+                    f'<div style="font-size:13px;color:{COLORS["muted"]};margin-top:2px;">'
+                    f'failing since {esc(idx["since"])} ({idx["days"]:.0f} days)</div>'
+                    '</div>'
+                )
+
+        html_parts.append('</div>')
+        html_body = "\n".join(html_parts)
+
+        text_lines = [f"Morning *arr stack check: {issue_count} issue(s) found\n"]
+        for section in sections:
+            if not (section["stuck"] or section["health"] or section["error"]):
+                continue
+            text_lines.append(f"[{section['app']}]")
+            if section["error"]:
+                text_lines.append(f"  ERROR: {section['error']}")
+            for item in section["stuck"]:
+                text_lines.append(
+                    f"  - {item['title']} [{item['indexer']}] stuck {item['age_h']:.0f}h "
+                    f"({item['state']}): {item['error']}"
+                )
+            for h in section["health"]:
+                text_lines.append(f"  {h['level'].upper()}: {h['message']}")
+            text_lines.append("")
+        if prowlarr_stale or prowlarr_error:
+            text_lines.append("[Prowlarr]")
+            if prowlarr_error:
+                text_lines.append(f"  ERROR: couldn't fetch indexer status: {prowlarr_error}")
+            for idx in prowlarr_stale:
+                text_lines.append(f"  - {idx['name']}: failing since {idx['since']} ({idx['days']:.0f} days)")
+        text_body = "\n".join(text_lines)
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"*arr stack: {issue_count} issue(s) found"
+        msg["From"] = SMTP_USERNAME
+        msg["To"] = MAIL_TO
+        msg.attach(MIMEText(text_body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
+
+        context = ssl.create_default_context()
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls(context=context)
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.sendmail(SMTP_USERNAME, [MAIL_TO], msg.as_string())
+
+        print(f"Sent report with {issue_count} issue(s).")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: arr-queue-check
+  namespace: apps
+spec:
+  schedule: "0 8 * * *" # 8 AM daily
+  timeZone: "America/New_York"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: arr-queue-check
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py"]
+            env:
+            - name: RADARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: RADARR_API_KEY
+            - name: SONARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: SONARR_API_KEY
+            - name: LIDARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: LIDARR_API_KEY
+            - name: READARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: READARR_API_KEY
+            - name: PROWLARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: PROWLARR_API_KEY
+            - name: SMTP_HOST
+              value: "smtp.gmail.com"
+            - name: SMTP_PORT
+              value: "587"
+            - name: SMTP_USERNAME
+              value: "ehulle117@gmail.com"
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-auth
+                  key: password
+            - name: MAIL_TO
+              value: "ehulle117@gmail.com"
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: arr-queue-check-script

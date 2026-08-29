@@ -51,6 +51,8 @@ spec:
               mountPath: /data
             - name: media
               mountPath: /media
+            - name: media
+              mountPath: /downloads
       volumes:
         - name: config
           persistentVolumeClaim:
