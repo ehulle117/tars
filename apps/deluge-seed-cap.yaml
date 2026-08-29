@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deluge-seed-cap-script
+  namespace: apps
+data:
+  seed_cap.py: |
+    import os
+    import sys
+
+    try:
+        from deluge_client import DelugeRPCClient
+    except ImportError:
+        os.system(f"{sys.executable} -m pip install --quiet deluge-client")
+        from deluge_client import DelugeRPCClient
+
+    HOST = os.environ.get("DELUGE_HOST", "deluge-svc.apps.svc.cluster.local")
+    PORT = int(os.environ.get("DELUGE_PORT", "58846"))
+    USERNAME = os.environ["DELUGE_USERNAME"]
+    PASSWORD = os.environ["DELUGE_PASSWORD"]
+    SEED_CAP_DAYS = int(os.environ.get("SEED_CAP_DAYS", "30"))
+    SEED_CAP_SECONDS = SEED_CAP_DAYS * 86400
+
+    client = DelugeRPCClient(HOST, PORT, USERNAME, PASSWORD)
+    client.connect()
+
+    torrents = client.call(
+        "core.get_torrents_status",
+        {},
+        [b"name", b"is_seed", b"paused", b"seeding_time"],
+    )
+
+    paused = []
+    for torrent_id, status in torrents.items():
+        is_seed = status.get(b"is_seed")
+        is_paused = status.get(b"paused")
+        seeding_time = status.get(b"seeding_time", 0)
+        if is_seed and not is_paused and seeding_time >= SEED_CAP_SECONDS:
+            name = status.get(b"name", torrent_id).decode(errors="replace")
+            days = seeding_time / 86400
+            client.call("core.pause_torrent", [torrent_id])
+            paused.append(f"{name} (seeding {days:.0f}d)")
+
+    if paused:
+        print(f"Paused {len(paused)} torrent(s) past the {SEED_CAP_DAYS}-day seed cap:")
+        for line in paused:
+            print(f"  - {line}")
+    else:
+        print(f"No torrents past the {SEED_CAP_DAYS}-day seed cap.")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: deluge-seed-cap
+  namespace: apps
+spec:
+  schedule: "30 4 * * *" # 4:30 AM daily
+  timeZone: "America/New_York"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: deluge-seed-cap
+            image: python:3.12-alpine
+            command: ["python", "/scripts/seed_cap.py"]
+            env:
+            - name: DELUGE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: deluge-rpc-auth
+                  key: USERNAME
+            - name: DELUGE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: deluge-rpc-auth
+                  key: PASSWORD
+            - name: SEED_CAP_DAYS
+              value: "30"
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: deluge-seed-cap-script
