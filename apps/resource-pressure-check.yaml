@@ -139,18 +139,42 @@ data:
         message = result.stdout.strip() or raw_findings
 
         # Tracked-issue triage results go to a Discord Forum channel, not the
-        # regular alerts text channel - forum webhooks require thread_name to
-        # create a new post per message. ?wait=true makes Discord return the
-        # created message (incl. channel_id, the new thread's id) instead of
-        # firing-and-forgetting, so a newly-opened issue's thread can be
-        # found again later to post a resolved notice.
-        thread_name = f"resource-pressure-check: {message[:80]}"
+        # regular alerts text channel. A brand-new finding creates a new
+        # Forum post (thread_name); a recurring one that Claude commented on
+        # an EXISTING issue for should land as a reply in that issue's
+        # original thread instead of spawning a new post each time - so look
+        # up its stashed discord_thread_id marker first. ?wait=true makes
+        # Discord return the created message (incl. channel_id, the thread's
+        # id) instead of firing-and-forgetting, so a newly-opened issue's
+        # thread can be found again later.
+        webhook_base = os.environ["TRACKED_ISSUES_WEBHOOK_URL"]
+        post_data = {"content": message}
+
+        commented = re.search(rf"Commented on {re.escape(repo)}#(\d+)", message)
+        existing_thread_id = None
+        if commented:
+            try:
+                existing_body = subprocess.run(
+                    ["gh", "issue", "view", commented.group(1), "--repo", repo, "--json", "body", "-q", ".body"],
+                    capture_output=True, text=True, timeout=30, check=True,
+                ).stdout
+                found = re.search(r"discord_thread_id: (\d+)", existing_body)
+                if found:
+                    existing_thread_id = found.group(1)
+            except Exception as e:
+                print(f"Couldn't look up existing issue's thread (falling back to a new post): {e}")
+
+        if existing_thread_id:
+            webhook_url = f"{webhook_base}?thread_id={existing_thread_id}&wait=true"
+        else:
+            post_data["thread_name"] = f"resource-pressure-check: {message[:80]}"
+            webhook_url = f"{webhook_base}?wait=true"
+
         # Discord's edge blocks Python urllib's TLS/HTTP fingerprint with a 403;
         # shelling out to busybox wget (present in python:3.12-alpine) avoids it.
         post = subprocess.run(
             ["wget", "-q", "-O-", "--header=Content-Type: application/json",
-             "--post-data", json.dumps({"content": message, "thread_name": thread_name}),
-             os.environ["TRACKED_ISSUES_WEBHOOK_URL"] + "?wait=true"],
+             "--post-data", json.dumps(post_data), webhook_url],
             check=True, timeout=15, capture_output=True, text=True,
         )
         print(f"Posted {len(issues)} issue(s), triaged: {message}")

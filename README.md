@@ -173,10 +173,10 @@ View Channels/Read Message History/Add Reactions scoped to that one Forum
 channel). Both are repo secrets, separate from anything in-cluster since
 Actions runs on GitHub's infrastructure, not Tars.
 
-This only marks the *original* thread/message from when an issue was
-first opened resolved — a recurring problem that gets "commented on
-existing issue" across several triage runs posts each of those comments
-into its own new Forum thread today, since Discord Forum webhooks always
-create a new post per message. Consolidating those into one running
-thread is a reasonable follow-up, not yet done here.
+A recurring problem — Claude decides to comment on an existing issue
+rather than open a new one — looks up that issue's stashed
+`discord_thread_id` first and, if found, posts the follow-up as a reply in
+that same original thread (`?thread_id=...`) instead of spawning a new
+Forum post. Falls back to creating a new post only if the existing issue
+predates this feature and has no marker to find.
 
