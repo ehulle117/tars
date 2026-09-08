@@ -1,9 +1,11 @@
 name: Notify Discord thread on issue close
 
 # pod-health-check/resource-pressure-check stash the Discord Forum thread id
-# in an issue's body (invisible HTML comment) when Claude opens it. This
-# posts a "Resolved" follow-up into that same thread when the issue closes -
-# a no-op for any issue that doesn't have that marker.
+# and original message id in an issue's body (invisible HTML comment) when
+# Claude opens it. This posts a "Resolved" follow-up into that same thread
+# and reacts with a checkmark on the original message when the issue closes
+# - a no-op for any issue that doesn't have those markers (e.g. filed by
+# hand, or opened before this existed).
 on:
   issues:
     types: [closed]
@@ -12,19 +14,30 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Post resolved notice to Discord thread
+      - name: Post resolved notice and react on the original message
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           WEBHOOK_URL: ${{ secrets.DISCORD_TRACKED_ISSUES_WEBHOOK_URL }}
+          BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
           THREAD_ID=$(printf '%s' "$ISSUE_BODY" | grep -oP '(?<=discord_thread_id: )\d+' | head -1)
           if [ -z "$THREAD_ID" ]; then
             echo "No Discord thread id on this issue, skipping."
             exit 0
           fi
+
           PAYLOAD=$(jq -n --arg num "$ISSUE_NUMBER" --arg title "$ISSUE_TITLE" \
             '{content: ("✅ Resolved: tars#" + $num + " closed — " + $title)}')
           curl -sf -H "Content-Type: application/json" -d "$PAYLOAD" \
             "${WEBHOOK_URL}?thread_id=${THREAD_ID}"
+
+          MESSAGE_ID=$(printf '%s' "$ISSUE_BODY" | grep -oP '(?<=discord_message_id: )\d+' | head -1)
+          if [ -z "$MESSAGE_ID" ]; then
+            echo "No original message id on this issue, skipping reaction."
+            exit 0
+          fi
+          curl -sf -X PUT \
+            -H "Authorization: Bot ${BOT_TOKEN}" \
+            "https://discord.com/api/v10/channels/${THREAD_ID}/messages/${MESSAGE_ID}/reactions/%E2%9C%85/@me"

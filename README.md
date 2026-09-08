@@ -154,21 +154,29 @@ require:
 ### Resolved-issue notice back to Discord
 
 When Claude opens a new tracked issue, the webhook post uses `?wait=true`
-to get the created Forum thread's id back, then stashes it in the issue
-body as an invisible HTML comment (`<!-- discord_thread_id: ... -->`) via
-one `gh issue edit` call. [`.github/workflows/issue-closed-notify.yml`](.github/workflows/issue-closed-notify.yml)
-triggers whenever any issue in this repo closes, looks for that marker,
+to get the created Forum thread's id *and* the original message's id back,
+then stashes both in the issue body as invisible HTML comments
+(`<!-- discord_thread_id: ... discord_message_id: ... -->`) via one
+`gh issue edit` call. [`.github/workflows/issue-closed-notify.yml`](.github/workflows/issue-closed-notify.yml)
+triggers whenever any issue in this repo closes, looks for those markers,
 and — only if present — posts a "✅ Resolved" follow-up into that exact
-thread (a no-op for any issue without the marker, e.g. one filed by hand).
+thread and adds a ✅ reaction directly on the original message (a no-op for
+any issue without the markers, e.g. one filed by hand, or opened before
+this existed).
 
-Needs a repo secret, separate from anything in-cluster since Actions runs
-on GitHub's infrastructure, not Tars: `DISCORD_TRACKED_ISSUES_WEBHOOK_URL`
-(same URL as the `tracked_issues_webhook_url` Secret key above).
+The follow-up message only needs the existing webhook (`DISCORD_TRACKED_ISSUES_WEBHOOK_URL`
+repo secret — same URL as the `tracked_issues_webhook_url` Secret key
+above), but adding a *reaction* to an existing message isn't something a
+webhook can do at all — that needs `DISCORD_BOT_TOKEN`, a real Discord bot
+(created via the Discord Developer Portal, invited to the server with
+View Channels/Read Message History/Add Reactions scoped to that one Forum
+channel). Both are repo secrets, separate from anything in-cluster since
+Actions runs on GitHub's infrastructure, not Tars.
 
-This only marks the *original* thread from when an issue was first opened
-resolved — a recurring problem that gets "commented on existing issue"
-across several triage runs posts each of those comments into its own new
-Forum thread today, since Discord Forum webhooks always create a new post
-per message. Consolidating those into one running thread is a reasonable
-follow-up, not yet done here.
+This only marks the *original* thread/message from when an issue was
+first opened resolved — a recurring problem that gets "commented on
+existing issue" across several triage runs posts each of those comments
+into its own new Forum thread today, since Discord Forum webhooks always
+create a new post per message. Consolidating those into one running
+thread is a reasonable follow-up, not yet done here.
 
