@@ -6,6 +6,13 @@ name: Notify Discord thread on issue close
 # and reacts with a checkmark on the original message when the issue closes
 # - a no-op for any issue that doesn't have those markers (e.g. filed by
 # hand, or opened before this existed).
+#
+# Uses the bot (not a webhook) for both steps: findings now route to one of
+# three different Forum channels (general tracked-issues, arr-queue-check,
+# tars-updater-agent), and a webhook can only post into threads under its
+# own parent channel, while the bot can post to any thread it has access to
+# using just the channel id already in the marker - no per-channel webhook
+# needed.
 on:
   issues:
     types: [closed]
@@ -19,7 +26,6 @@ jobs:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
-          WEBHOOK_URL: ${{ secrets.DISCORD_TRACKED_ISSUES_WEBHOOK_URL }}
           BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
           THREAD_ID=$(printf '%s' "$ISSUE_BODY" | grep -oP '(?<=discord_thread_id: )\d+' | head -1)
@@ -30,8 +36,11 @@ jobs:
 
           PAYLOAD=$(jq -n --arg num "$ISSUE_NUMBER" --arg title "$ISSUE_TITLE" \
             '{content: ("✅ Resolved: tars#" + $num + " closed — " + $title)}')
-          curl -sf -H "Content-Type: application/json" -d "$PAYLOAD" \
-            "${WEBHOOK_URL}?thread_id=${THREAD_ID}"
+          curl -sf -X POST \
+            -H "Authorization: Bot ${BOT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "https://discord.com/api/v10/channels/${THREAD_ID}/messages"
 
           MESSAGE_ID=$(printf '%s' "$ISSUE_BODY" | grep -oP '(?<=discord_message_id: )\d+' | head -1)
           if [ -z "$MESSAGE_ID" ]; then
