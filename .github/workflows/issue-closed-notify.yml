@@ -1,0 +1,30 @@
+name: Notify Discord thread on issue close
+
+# pod-health-check/resource-pressure-check stash the Discord Forum thread id
+# in an issue's body (invisible HTML comment) when Claude opens it. This
+# posts a "Resolved" follow-up into that same thread when the issue closes -
+# a no-op for any issue that doesn't have that marker.
+on:
+  issues:
+    types: [closed]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post resolved notice to Discord thread
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          WEBHOOK_URL: ${{ secrets.DISCORD_TRACKED_ISSUES_WEBHOOK_URL }}
+        run: |
+          THREAD_ID=$(printf '%s' "$ISSUE_BODY" | grep -oP '(?<=discord_thread_id: )\d+' | head -1)
+          if [ -z "$THREAD_ID" ]; then
+            echo "No Discord thread id on this issue, skipping."
+            exit 0
+          fi
+          PAYLOAD=$(jq -n --arg num "$ISSUE_NUMBER" --arg title "$ISSUE_TITLE" \
+            '{content: ("✅ Resolved: tars#" + $num + " closed — " + $title)}')
+          curl -sf -H "Content-Type: application/json" -d "$PAYLOAD" \
+            "${WEBHOOK_URL}?thread_id=${THREAD_ID}"
