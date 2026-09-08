@@ -1,0 +1,111 @@
+# Scheduled cluster health digest, run by Claude Code itself (no Anthropic
+# API billing — uses the same claude-code-config-pvc auth as the interactive
+# dev pod in claude-code.yaml, so `claude login` there covers this too).
+#
+# Read-only: runs as the tars-insight-vm ServiceAccount, whose ClusterRole
+# only grants get/list/watch on workload/status objects (no secrets, no
+# writes). See its RBAC objects (created out-of-band, not in this repo)
+# for the exact rules.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tars-insight-digest-prompt
+  namespace: apps
+data:
+  prompt.md: |
+    You are doing a periodic health assessment of the "tars" homelab k3s
+    cluster. You have read-only kubectl access via the current context —
+    you cannot and must not attempt to modify anything; every write verb is
+    already blocked by RBAC, so don't waste turns trying.
+
+    Gather:
+    - `kubectl get pods -A` — note anything not Running/Completed,
+      especially CrashLoopBackOff, ImagePullBackOff, high restart counts,
+      or long-Pending pods
+    - `kubectl get events -A --field-selector type!=Normal --sort-by=.lastTimestamp`
+      (or equivalent) — recent warnings/errors
+    - `kubectl get nodes` and `kubectl describe nodes` — any pressure
+      conditions
+    - `kubectl get jobs -A` — any recently failed Jobs (CronJob runs)
+    - For anything flagged above, pull a short `kubectl logs --tail=40`
+      from the relevant pod/container for context
+
+    Then assess: which findings are real, actionable problems versus
+    background noise (e.g. a one-off restart from a node reboot weeks ago,
+    a Job that failed once but has since succeeded, informational events).
+    Use judgment — don't just list everything you saw.
+
+    Your final response (and only your final response — no other commentary
+    before or after it) should be a short Discord message, plain text,
+    under 1800 characters:
+    - A one-line overall status
+    - A bulleted list of real issues worth attention, each with a one-line
+      recommendation
+    - Skip the noise section entirely if there's nothing worth mentioning —
+      do not pad the message with "everything else is fine" filler
+
+    Something outside this session takes your final response and posts it
+    to Discord — you do not need to (and cannot) post it yourself.
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tars-insight-digest
+  namespace: apps
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          serviceAccountName: tars-insight-vm
+          nodeSelector:
+            kubernetes.io/hostname: k3s-worker-case
+          restartPolicy: OnFailure
+          containers:
+            - name: tars-insight-digest
+              image: node:22-bookworm-slim
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  apt-get update && \
+                  apt-get install -y --no-install-recommends git openssh-client ca-certificates curl wget jq && \
+                  curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
+                  install -m 0755 kubectl /usr/local/bin/kubectl && \
+                  npm install -g @anthropic-ai/claude-code
+
+                  # Claude only assesses and writes the digest to a file - it never
+                  # sees the webhook URL. Claude Code's own Bash-tool safety check
+                  # refuses to expand env vars that look like secrets (WEBHOOK_URL
+                  # matches that pattern) even for a value this benign, so posting
+                  # to Discord happens here, in plain shell, outside its tool loop.
+                  claude -p "$(cat /prompt/prompt.md)" --allowedTools "Bash(kubectl *)" > /tmp/digest.txt
+
+                  PAYLOAD=$(jq -n --arg content "$(cat /tmp/digest.txt)" '{content: $content}')
+                  wget -q -O- --header="Content-Type: application/json" --post-data "$PAYLOAD" "$RECOMMENDATIONS_WEBHOOK_URL"
+              env:
+                - name: TZ
+                  value: "America/New_York"
+                - name: RECOMMENDATIONS_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: discord-alerts
+                      key: recommendations_webhook_url
+              volumeMounts:
+                - name: claude-config
+                  mountPath: /root/.claude
+                - name: prompt
+                  mountPath: /prompt
+          volumes:
+            - name: claude-config
+              persistentVolumeClaim:
+                claimName: claude-code-config-pvc
+            - name: prompt
+              configMap:
+                name: tars-insight-digest-prompt
