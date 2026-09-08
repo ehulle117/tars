@@ -37,6 +37,9 @@ spec:
                     wget -q -O- --header="Content-Type: application/json" \
                       --post-data="{\"content\": \"**case-worker-appdata-backup failed** on host k3s-worker-case\"}" \
                       "$DISCORD_WEBHOOK_URL" >/dev/null 2>&1
+                    mkdir -p /destination/.tars-triage-queue
+                    echo "case-worker-appdata-backup (host k3s-worker-case) failed at $(date -Iseconds). Check: kubectl logs -n apps pod/$HOSTNAME" \
+                      > "/destination/.tars-triage-queue/case-worker-appdata-backup-$(date +%Y%m%d%H%M%S).txt"
                     exit 1
                   fi
                   wget -q -O- "$KUMA_PUSH_URL" >/dev/null 2>&1

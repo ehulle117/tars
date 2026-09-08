@@ -108,6 +108,8 @@ spec:
               subPath: agent-config.yaml
             - name: db-volume
               mountPath: /data
+            - name: triage-queue
+              mountPath: /queue
       volumes:
         - name: config-volume
           configMap:
@@ -115,3 +117,6 @@ spec:
         - name: db-volume
           persistentVolumeClaim:
             claimName: tars-updater-db-pvc
+        - name: triage-queue
+          persistentVolumeClaim:
+            claimName: nfs-media-pvc

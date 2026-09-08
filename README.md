@@ -32,9 +32,9 @@ All workloads run in the `apps` namespace unless noted.
 | [HortusFox](https://hortusfox.com/) | [`apps/hortusfox.yaml`](apps/hortusfox.yaml) | mariadb + app | Plant-care tracker, with cron sidecars ([`hortusfox-cron.yaml`](apps/hortusfox-cron.yaml) every 15 min, [`hortusfox-digest.yaml`](apps/hortusfox-digest.yaml) daily 7 AM email) |
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | [`apps/uptime-kuma.yaml`](apps/uptime-kuma.yaml) | `louislam/uptime-kuma` | Status/uptime monitoring for the cluster |
 | [Valheim](docs/valheim/README.md) | [`apps/valheim.yaml`](apps/valheim.yaml) | `ghcr.io/lloesche/valheim-server` | Dedicated game server, reachable over Tailscale (see linked doc for network diagram) |
-| [tars-updater-agent](tars-updater-agent/README.md) | [`apps/tars-updater-agent.yaml`](apps/tars-updater-agent.yaml) | `ghcr.io/ehulle117/tars-updater-agent` | Custom service: daily Trivy vuln scans + weekly OS/container update digest emailed via SMTP |
-| Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml), [`apps/case-worker-appdata-backup.yaml`](apps/case-worker-appdata-backup.yaml), [`apps/pi-appdata-backup.yaml`](apps/pi-appdata-backup.yaml) | `alpine` | CronJobs, daily (3:00/3:15/3:30 AM), copy each node's local-path appdata to Case; posts to Discord (`discord-alerts` secret) if a run fails |
-| *arr queue check | [`apps/arr-queue-check.yaml`](apps/arr-queue-check.yaml) | `python:3.12-alpine` | CronJob, daily 8 AM, checks Radarr/Sonarr/Lidarr/Readarr queues for stuck imports (24h+) and Prowlarr for long-failing indexers; emails a report only when something's actually wrong |
+| [tars-updater-agent](tars-updater-agent/README.md) | [`apps/tars-updater-agent.yaml`](apps/tars-updater-agent.yaml) | `ghcr.io/ehulle117/tars-updater-agent` | Custom service: daily Trivy vuln scans (critical findings also queued for Claude triage — see "Claude-triaged alerts" below) + weekly OS/container update digest emailed via SMTP (digest only, not triaged) |
+| Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml), [`apps/case-worker-appdata-backup.yaml`](apps/case-worker-appdata-backup.yaml), [`apps/pi-appdata-backup.yaml`](apps/pi-appdata-backup.yaml) | `alpine` | CronJobs, daily (3:00/3:15/3:30 AM), copy each node's local-path appdata to Case; posts to Discord (`discord-alerts` secret) and queues for Claude triage if a run fails |
+| *arr queue check | [`apps/arr-queue-check.yaml`](apps/arr-queue-check.yaml) | `python:3.12-alpine` | CronJob, daily 8 AM, checks Radarr/Sonarr/Lidarr/Readarr queues for stuck imports (24h+) and Prowlarr for long-failing indexers; emails a report and queues for Claude triage only when something's actually wrong |
 | Pod health check | [`apps/pod-health-check.yaml`](apps/pod-health-check.yaml) | `python:3.12-alpine` | CronJob, every 15 min, flags CrashLoopBackOff/ImagePullBackOff/OOMKilled/high-restart/stuck-Pending pods cluster-wide. Read-only via the `cluster-health-checker` ClusterRole. When it finds something, Claude Code triages it (checks for an existing open GitHub issue via `gh`, opens/comments/skips accordingly) and posts the resulting one-line decision to a Discord Forum channel — see "Claude-triaged alerts" below. |
 | Resource pressure check | [`apps/resource-pressure-check.yaml`](apps/resource-pressure-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, checks node CPU/memory (via metrics-server) and DiskPressure/MemoryPressure conditions, plus Case's NFS export disk usage above 90%. Same Claude-triage-on-finding behavior as Pod health check above. |
 | Claude Code dev pod | [`apps/claude-code.yaml`](apps/claude-code.yaml) | `node:22-bookworm-slim` + `@anthropic-ai/claude-code` | Persistent pod you `kubectl exec` into for interactive Claude Code sessions against this repo/cluster. Not a service — just `sleep infinity` with PVCs for `/workspace` and `~/.claude` so login survives restarts. |
@@ -101,25 +101,43 @@ result as provisional and re-verify after the real merge lands.
 
 ### Claude-triaged alerts
 
-`pod-health-check` and `resource-pressure-check` are the only two alert
-CronJobs that pipe their findings through Claude Code for triage rather
-than posting a raw finding straight to Discord — chosen because neither is
-node-pinned for hostPath reasons, so both can be scheduled onto
-`k3s-worker-case` alongside the `claude-code-config-pvc` (the
-`*-appdata-backup` CronJobs and Argo CD/Uptime Kuma's native notifications
-are excluded: the backups are hard-pinned to their own node for hostPath
-access and can't co-locate with that PVC, and Argo CD/Kuma only know how to
-POST to a fixed webhook, with no hook for a custom script).
+`pod-health-check` is where all Claude/`gh` triage actually happens, since
+it's the only alert source both unpinned from any specific node *and*
+running frequently (every 15 min). Two ways a finding gets to it:
 
-When either finds something, it installs Claude Code + the `gh` CLI (only
-on that path — the common "all healthy" case never pays this cost), then
-has Claude check `gh issue list` for an existing open issue covering the
-finding before deciding whether to open a new one, comment on the existing
-one, or conclude it's not actually worth tracking. Claude's final response
-is a single Discord-ready line, posted to a **Discord Forum channel** via
-the `tracked_issues_webhook_url` key (forum webhooks require a
-`thread_name` field per message to create a new post) — kept separate from
-the regular alerts channel so tracked issues don't mix with raw noise.
+1. **Direct** (`pod-health-check`, `resource-pressure-check`): neither is
+   node-pinned for hostPath reasons, so both are scheduled onto
+   `k3s-worker-case` alongside the `claude-code-config-pvc` and triage their
+   own findings in the same run they detect them in.
+2. **Queued** (everything else that used to only send an email or a raw
+   Discord ping): `arr-queue-check` and the three `*-appdata-backup`
+   CronJobs, plus `tars-updater-agent`'s critical-CVE alert, drop a small
+   text file in `.tars-triage-queue/` on the shared `nfs-media-pvc` (already
+   mounted in most of them for other reasons) whenever they'd otherwise have
+   emailed/alerted. `pod-health-check` drains that directory every run,
+   folds each file's content in alongside its own findings, and deletes them
+   only after a successful triage+post — a failed run leaves them for the
+   next attempt. This exists because those jobs are hard node-pinned (the
+   backups, to their own host's hostPath) or simply not built to run Claude
+   themselves (`tars-updater-agent`'s own container image), so they can't
+   co-locate with the Claude config PVC directly.
+   - Not everything that emails is routed here: `hortusfox-daily-digest`
+     (plant-care task reminders) and `tars-updater-agent`'s weekly OS/update
+     digest are routine informational summaries, not problem reports —
+     opening a GitHub issue over "water the ferns" or "a package has an
+     update available" doesn't make sense, so those stay plain email.
+   - Argo CD's and Uptime Kuma's native notifications are also excluded —
+     both only know how to POST to a fixed webhook URL, with no hook for a
+     custom script to redirect through.
+
+Either way, once there's something to triage, Claude checks `gh issue list`
+for an existing open issue covering the finding before deciding whether to
+open a new one, comment on the existing one, or conclude it's not actually
+worth tracking. Claude's final response is a single Discord-ready line,
+posted to a **Discord Forum channel** via the `tracked_issues_webhook_url`
+key (forum webhooks require a `thread_name` field per message to create a
+new post) — kept separate from the regular alerts channel so tracked issues
+don't mix with raw noise.
 
 Needs, on top of what `pod-health-check`/`resource-pressure-check` already
 require:
@@ -130,4 +148,6 @@ require:
   wired into Argo CD's repo credentials, reused here for `gh issue`
   read/write access via `GH_TOKEN`
 - `GITHUB_REPO` env var (`ehulle117/tars`)
+- Queue writers need `nfs-media-pvc` mounted (most already have it) and
+  write to `<mount>/.tars-triage-queue/<source>-<timestamp>.txt`
 

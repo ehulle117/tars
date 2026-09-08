@@ -116,6 +116,22 @@ data:
             if created and minutes_since(created) >= PENDING_MINUTES_THRESHOLD:
                 issues.append(f"`{full}` stuck Pending for {minutes_since(created):.0f}m")
 
+    # Other jobs that can't co-locate with the Claude config PVC (different
+    # node, or no PVC mount at all) drop a small text file here instead of
+    # triaging themselves - this run drains it alongside its own findings so
+    # all Claude/gh work happens in one place. Consumed only after a
+    # successful triage+post below, so a failed run leaves files for retry.
+    QUEUE_DIR = "/queue/.tars-triage-queue"
+    queued_files = []
+    if os.path.isdir(QUEUE_DIR):
+        for fname in sorted(os.listdir(QUEUE_DIR)):
+            fpath = os.path.join(QUEUE_DIR, fname)
+            with open(fpath) as f:
+                content = f.read().strip()
+            if content:
+                issues.append(f"[from {fname}]\n{content}")
+            queued_files.append(fpath)
+
     if not issues:
         print("All pods healthy. Skipping Discord notification.")
     else:
@@ -177,6 +193,9 @@ data:
         )
         print(f"Posted {len(issues)} issue(s), triaged: {message}")
 
+        for fpath in queued_files:
+            os.remove(fpath)
+
     # Heartbeat to Uptime Kuma so a crashed/never-ran job (which wouldn't reach
     # this line) shows as down, instead of failing silently.
     subprocess.run(["wget", "-q", "-O-", os.environ["KUMA_PUSH_URL"]], check=True, timeout=15)
@@ -230,6 +249,8 @@ spec:
               mountPath: /scripts
             - name: claude-config
               mountPath: /root/.claude
+            - name: triage-queue
+              mountPath: /queue
           volumes:
           - name: script
             configMap:
@@ -237,3 +258,6 @@ spec:
           - name: claude-config
             persistentVolumeClaim:
               claimName: claude-code-config-pvc
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc
