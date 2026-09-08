@@ -1,0 +1,144 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: resource-pressure-check-script
+  namespace: apps
+data:
+  check.py: |
+    import json
+    import os
+    import shutil
+    import ssl
+    import urllib.request
+
+    TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    with open(TOKEN_PATH) as f:
+        TOKEN = f.read().strip()
+
+    API = "https://kubernetes.default.svc"
+    DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK_URL"]
+
+    CPU_PCT_THRESHOLD = 90
+    MEM_PCT_THRESHOLD = 90
+    CASE_DISK_PCT_THRESHOLD = 90
+
+    ctx = ssl.create_default_context(cafile=CA_PATH)
+
+
+    def api_get(path):
+        req = urllib.request.Request(f"{API}{path}", headers={"Authorization": f"Bearer {TOKEN}"})
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+            return json.loads(resp.read().decode())
+
+
+    def parse_cpu(q):
+        if q.endswith("n"):
+            return int(q[:-1]) / 1_000_000_000
+        if q.endswith("u"):
+            return int(q[:-1]) / 1_000_000
+        if q.endswith("m"):
+            return int(q[:-1]) / 1000
+        return float(q)
+
+
+    def parse_mem(q):
+        units = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4, "K": 1000, "M": 1000**2, "G": 1000**3}
+        for suffix, mult in units.items():
+            if q.endswith(suffix):
+                return int(q[:-len(suffix)]) * mult
+        return int(q)
+
+
+    issues = []
+
+    nodes = api_get("/api/v1/nodes")["items"]
+    node_allocatable = {}
+    for node in nodes:
+        name = node["metadata"]["name"]
+        node_allocatable[name] = {
+            "cpu": parse_cpu(node["status"]["allocatable"]["cpu"]),
+            "memory": parse_mem(node["status"]["allocatable"]["memory"]),
+        }
+        for cond in node["status"].get("conditions", []):
+            if cond["type"] in ("MemoryPressure", "DiskPressure", "PIDPressure") and cond["status"] == "True":
+                issues.append(f"node `{name}`: {cond['type']} (reason: {cond.get('reason', 'unknown')})")
+            if cond["type"] == "Ready" and cond["status"] != "True":
+                issues.append(f"node `{name}`: not Ready (reason: {cond.get('reason', 'unknown')})")
+
+    try:
+        metrics = api_get("/apis/metrics.k8s.io/v1beta1/nodes")["items"]
+        for m in metrics:
+            name = m["metadata"]["name"]
+            alloc = node_allocatable.get(name)
+            if not alloc:
+                continue
+            cpu_pct = parse_cpu(m["usage"]["cpu"]) / alloc["cpu"] * 100
+            mem_pct = parse_mem(m["usage"]["memory"]) / alloc["memory"] * 100
+            if cpu_pct >= CPU_PCT_THRESHOLD:
+                issues.append(f"node `{name}`: CPU at {cpu_pct:.0f}%")
+            if mem_pct >= MEM_PCT_THRESHOLD:
+                issues.append(f"node `{name}`: memory at {mem_pct:.0f}%")
+    except Exception as e:
+        issues.append(f"couldn't fetch node metrics: {e}")
+
+    try:
+        total, used, free = shutil.disk_usage("/mnt/case-data")
+        pct = used / total * 100
+        if pct >= CASE_DISK_PCT_THRESHOLD:
+            issues.append(f"Case NFS export (`/mnt/user/data`): disk at {pct:.0f}%")
+    except Exception as e:
+        issues.append(f"couldn't check Case disk usage: {e}")
+
+    if not issues:
+        print("No resource pressure detected. Skipping Discord notification.")
+    else:
+        body = "**Resource pressure check found issues:**\n" + "\n".join(f"- {i}" for i in issues)
+        req = urllib.request.Request(
+            DISCORD_WEBHOOK,
+            data=json.dumps({"content": body}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp.read()
+        print(f"Posted {len(issues)} issue(s) to Discord.")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: resource-pressure-check
+  namespace: apps
+spec:
+  schedule: "*/30 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: cluster-health-checker
+          restartPolicy: OnFailure
+          containers:
+          - name: resource-pressure-check
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py"]
+            env:
+            - name: DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: discord-alerts
+                  key: webhook_url
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: case-data
+              mountPath: /mnt/case-data
+              readOnly: true
+          volumes:
+          - name: script
+            configMap:
+              name: resource-pressure-check-script
+          - name: case-data
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc

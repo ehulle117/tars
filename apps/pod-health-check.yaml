@@ -1,0 +1,150 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-health-checker
+  namespace: apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-health-checker
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-health-checker
+subjects:
+  - kind: ServiceAccount
+    name: cluster-health-checker
+    namespace: apps
+roleRef:
+  kind: ClusterRole
+  name: cluster-health-checker
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pod-health-check-script
+  namespace: apps
+data:
+  check.py: |
+    import json
+    import os
+    import ssl
+    import urllib.request
+    from datetime import datetime, timezone
+
+    with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
+        TOKEN = f.read().strip()
+    with open("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", "rb") as f:
+        CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+    API = "https://kubernetes.default.svc"
+    DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK_URL"]
+
+    PENDING_MINUTES_THRESHOLD = 15
+    RESTART_COUNT_THRESHOLD = 5
+    BAD_WAITING_REASONS = {"CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "InvalidImageName"}
+
+    ctx = ssl.create_default_context(cafile=CA_PATH)
+
+
+    def api_get(path):
+        req = urllib.request.Request(f"{API}{path}", headers={"Authorization": f"Bearer {TOKEN}"})
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+            return json.loads(resp.read().decode())
+
+
+    def minutes_since(iso_ts):
+        ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - ts).total_seconds() / 60
+
+
+    pods = api_get("/api/v1/pods")["items"]
+
+    issues = []
+
+    for pod in pods:
+        ns = pod["metadata"]["namespace"]
+        name = pod["metadata"]["name"]
+        phase = pod["status"].get("phase")
+        full = f"{ns}/{name}"
+
+        if phase == "Pending":
+            created = pod["metadata"].get("creationTimestamp")
+            if created and minutes_since(created) >= PENDING_MINUTES_THRESHOLD:
+                issues.append(f"`{full}` stuck Pending for {minutes_since(created):.0f}m")
+            continue
+
+        if phase == "Unknown":
+            issues.append(f"`{full}` in Unknown state")
+            continue
+
+        for cs in pod["status"].get("containerStatuses", []):
+            waiting = cs.get("state", {}).get("waiting")
+            if waiting and waiting.get("reason") in BAD_WAITING_REASONS:
+                issues.append(f"`{full}` container `{cs['name']}`: {waiting['reason']} - {waiting.get('message', '')[:120]}")
+
+            terminated = cs.get("lastState", {}).get("terminated")
+            if terminated and terminated.get("reason") == "OOMKilled":
+                issues.append(f"`{full}` container `{cs['name']}`: last killed OOMKilled")
+
+            if cs.get("restartCount", 0) >= RESTART_COUNT_THRESHOLD:
+                issues.append(f"`{full}` container `{cs['name']}`: {cs['restartCount']} restarts")
+
+    if not issues:
+        print("All pods healthy. Skipping Discord notification.")
+    else:
+        body = "**Pod health check found issues:**\n" + "\n".join(f"- {i}" for i in issues[:25])
+        if len(issues) > 25:
+            body += f"\n...and {len(issues) - 25} more"
+        req = urllib.request.Request(
+            DISCORD_WEBHOOK,
+            data=json.dumps({"content": body}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp.read()
+        print(f"Posted {len(issues)} issue(s) to Discord.")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pod-health-check
+  namespace: apps
+spec:
+  schedule: "*/15 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: cluster-health-checker
+          restartPolicy: OnFailure
+          containers:
+          - name: pod-health-check
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py"]
+            env:
+            - name: DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: discord-alerts
+                  key: webhook_url
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+          volumes:
+          - name: script
+            configMap:
+              name: pod-health-check-script

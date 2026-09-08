@@ -22,15 +22,29 @@ spec:
                 - /bin/sh
                 - -c
                 - |
-                  set -e
-                  echo "Starting backup of k3s local-path storage on tars..."
-                  DATE=$(date +%Y-%m-%d_%H-%M-%S)
-                  mkdir -p /destination/tars_k8s_appdata
-                  tar -czf /destination/tars_k8s_appdata/backup_${DATE}.tar.gz -C /source .
-                  echo "Backup completed successfully: backup_${DATE}.tar.gz"
-                  echo "Cleaning up backups older than 7 days..."
-                  find /destination/tars_k8s_appdata -name "backup_*.tar.gz" -mtime +7 -delete
-                  echo "Cleanup complete."
+                  run() {
+                    set -e
+                    echo "Starting backup of k3s local-path storage on tars..."
+                    DATE=$(date +%Y-%m-%d_%H-%M-%S)
+                    mkdir -p /destination/tars_k8s_appdata
+                    tar -czf /destination/tars_k8s_appdata/backup_${DATE}.tar.gz -C /source .
+                    echo "Backup completed successfully: backup_${DATE}.tar.gz"
+                    echo "Cleaning up backups older than 7 days..."
+                    find /destination/tars_k8s_appdata -name "backup_*.tar.gz" -mtime +7 -delete
+                    echo "Cleanup complete."
+                  }
+                  if ! run; then
+                    wget -q -O- --header="Content-Type: application/json" \
+                      --post-data="{\"content\": \"**tars-appdata-backup failed** on host tars\"}" \
+                      "$DISCORD_WEBHOOK_URL" >/dev/null 2>&1
+                    exit 1
+                  fi
+              env:
+                - name: DISCORD_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: discord-alerts
+                      key: webhook_url
               volumeMounts:
                 - name: source-data
                   mountPath: /source

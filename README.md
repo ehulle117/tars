@@ -33,8 +33,10 @@ All workloads run in the `apps` namespace unless noted.
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | [`apps/uptime-kuma.yaml`](apps/uptime-kuma.yaml) | `louislam/uptime-kuma` | Status/uptime monitoring for the cluster |
 | [Valheim](docs/valheim/README.md) | [`apps/valheim.yaml`](apps/valheim.yaml) | `ghcr.io/lloesche/valheim-server` | Dedicated game server, reachable over Tailscale (see linked doc for network diagram) |
 | [tars-updater-agent](tars-updater-agent/README.md) | [`apps/tars-updater-agent.yaml`](apps/tars-updater-agent.yaml) | `ghcr.io/ehulle117/tars-updater-agent` | Custom service: daily Trivy vuln scans + weekly OS/container update digest emailed via SMTP |
-| Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml) | `alpine` | CronJob, daily 3 AM, copies PVC appdata to backup storage |
+| Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml), [`apps/case-worker-appdata-backup.yaml`](apps/case-worker-appdata-backup.yaml), [`apps/pi-appdata-backup.yaml`](apps/pi-appdata-backup.yaml) | `alpine` | CronJobs, daily (3:00/3:15/3:30 AM), copy each node's local-path appdata to Case; posts to Discord (`discord-alerts` secret) if a run fails |
 | *arr queue check | [`apps/arr-queue-check.yaml`](apps/arr-queue-check.yaml) | `python:3.12-alpine` | CronJob, daily 8 AM, checks Radarr/Sonarr/Lidarr/Readarr queues for stuck imports (24h+) and Prowlarr for long-failing indexers; emails a report only when something's actually wrong |
+| Pod health check | [`apps/pod-health-check.yaml`](apps/pod-health-check.yaml) | `python:3.12-alpine` | CronJob, every 15 min, flags CrashLoopBackOff/ImagePullBackOff/OOMKilled/high-restart/stuck-Pending pods cluster-wide; posts to Discord only when something's wrong. Read-only via the `cluster-health-checker` ClusterRole. |
+| Resource pressure check | [`apps/resource-pressure-check.yaml`](apps/resource-pressure-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, checks node CPU/memory (via metrics-server) and DiskPressure/MemoryPressure conditions, plus Case's NFS export disk usage; posts to Discord above 90%. |
 
 ## Storage
 
@@ -55,4 +57,23 @@ appdata backup CronJob, media on Case is not managed by this repo.
    actual `Secret` object out-of-band, not committed.
 3. Add a row to the table above and commit to `main`. Argo CD picks it up
    automatically.
+
+## Alerting
+
+Cluster-health CronJobs (pod health, resource pressure, backup failures) and
+Argo CD's own `OutOfSync`/`Degraded` notifications all post to a single
+Discord channel via webhook.
+
+- **`discord-alerts` Secret** (`apps` namespace, key `webhook_url`): created
+  out-of-band like `smtp-auth`, not committed. Required by
+  `pod-health-check`, `resource-pressure-check`, and the three
+  `*-appdata-backup` CronJobs.
+- **Argo CD notifications**: configured directly on the cluster in
+  `argocd-notifications-cm` / `argocd-notifications-secret` (namespace
+  `argocd`) — outside this repo's GitOps scope, since it configures Argo CD
+  itself rather than an app it manages. The webhook service is registered
+  under key `service.webhook.discord`; `selfHeal: true` is set on both the
+  `tars-apps` and `tars-storage` Applications so manual drift (like a
+  live-patched container that isn't in git) gets reverted automatically
+  instead of silently persisting.
 
