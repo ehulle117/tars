@@ -7,6 +7,7 @@ data:
   check.py: |
     import json
     import os
+    import re
     import shutil
     import ssl
     import subprocess
@@ -139,17 +140,41 @@ data:
 
         # Tracked-issue triage results go to a Discord Forum channel, not the
         # regular alerts text channel - forum webhooks require thread_name to
-        # create a new post per message.
+        # create a new post per message. ?wait=true makes Discord return the
+        # created message (incl. channel_id, the new thread's id) instead of
+        # firing-and-forgetting, so a newly-opened issue's thread can be
+        # found again later to post a resolved notice.
         thread_name = f"resource-pressure-check: {message[:80]}"
         # Discord's edge blocks Python urllib's TLS/HTTP fingerprint with a 403;
         # shelling out to busybox wget (present in python:3.12-alpine) avoids it.
-        subprocess.run(
+        post = subprocess.run(
             ["wget", "-q", "-O-", "--header=Content-Type: application/json",
              "--post-data", json.dumps({"content": message, "thread_name": thread_name}),
-             os.environ["TRACKED_ISSUES_WEBHOOK_URL"]],
-            check=True, timeout=15,
+             os.environ["TRACKED_ISSUES_WEBHOOK_URL"] + "?wait=true"],
+            check=True, timeout=15, capture_output=True, text=True,
         )
         print(f"Posted {len(issues)} issue(s), triaged: {message}")
+
+        # If Claude opened a new issue, stash this thread's id in the issue
+        # body (invisible HTML comment) so a GitHub Actions workflow can find
+        # it again and post a "Resolved" notice into the same thread when
+        # the issue closes - see .github/workflows/issue-closed-notify.yml.
+        opened = re.search(rf"Opened {re.escape(repo)}#(\d+)", message)
+        if opened:
+            try:
+                thread_id = json.loads(post.stdout)["channel_id"]
+                issue_num = opened.group(1)
+                current_body = subprocess.run(
+                    ["gh", "issue", "view", issue_num, "--repo", repo, "--json", "body", "-q", ".body"],
+                    capture_output=True, text=True, timeout=30, check=True,
+                ).stdout
+                subprocess.run(
+                    ["gh", "issue", "edit", issue_num, "--repo", repo, "--body",
+                     f"{current_body}\n\n<!-- discord_thread_id: {thread_id} -->"],
+                    check=True, timeout=30,
+                )
+            except Exception as e:
+                print(f"Couldn't stash Discord thread id on the new issue (non-fatal): {e}")
 
     # Heartbeat to Uptime Kuma so a crashed/never-ran job (which wouldn't reach
     # this line) shows as down, instead of failing silently.

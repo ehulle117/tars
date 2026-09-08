@@ -151,3 +151,24 @@ require:
 - Queue writers need `nfs-media-pvc` mounted (most already have it) and
   write to `<mount>/.tars-triage-queue/<source>-<timestamp>.txt`
 
+### Resolved-issue notice back to Discord
+
+When Claude opens a new tracked issue, the webhook post uses `?wait=true`
+to get the created Forum thread's id back, then stashes it in the issue
+body as an invisible HTML comment (`<!-- discord_thread_id: ... -->`) via
+one `gh issue edit` call. [`.github/workflows/issue-closed-notify.yml`](.github/workflows/issue-closed-notify.yml)
+triggers whenever any issue in this repo closes, looks for that marker,
+and — only if present — posts a "✅ Resolved" follow-up into that exact
+thread (a no-op for any issue without the marker, e.g. one filed by hand).
+
+Needs a repo secret, separate from anything in-cluster since Actions runs
+on GitHub's infrastructure, not Tars: `DISCORD_TRACKED_ISSUES_WEBHOOK_URL`
+(same URL as the `tracked_issues_webhook_url` Secret key above).
+
+This only marks the *original* thread from when an issue was first opened
+resolved — a recurring problem that gets "commented on existing issue"
+across several triage runs posts each of those comments into its own new
+Forum thread today, since Discord Forum webhooks always create a new post
+per message. Consolidating those into one running thread is a reasonable
+follow-up, not yet done here.
+
