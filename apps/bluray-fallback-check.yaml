@@ -59,45 +59,74 @@ data:
     movies = api("GET", "/api/v3/movie")
     now = datetime.now(timezone.utc)
     state = load_state()
-    seen_ids = set()
-    started, switched, cleaned = [], [], []
+    # state["waiting_strict"][id]: when we first saw this movie stuck on the strict
+    #   profile -- after WAIT_DAYS we switch it to the fallback profile.
+    # state["waiting_fallback"][id]: when we last (re-)searched this movie while it
+    #   sits on the fallback profile below cutoff -- every WAIT_DAYS we search again,
+    #   since Radarr's RSS sync only catches newly-published releases, not older
+    #   Bluray/Remux releases indexed before the movie was last searched.
+    waiting_strict = state.setdefault("waiting_strict", {})
+    waiting_fallback = state.setdefault("waiting_fallback", {})
+    seen_strict, seen_fallback = set(), set()
+    started, switched, researched, cleaned = [], [], [], []
 
     for movie in movies:
-        if movie.get("qualityProfileId") != strict_id:
-            continue
-
         current_quality = (movie.get("movieFile") or {}).get("quality", {}).get("quality", {}).get("name", "")
         if is_bluray_quality(current_quality):
             continue
 
         movie_id = str(movie["id"])
-        seen_ids.add(movie_id)
+        profile_id = movie.get("qualityProfileId")
 
-        if movie_id not in state:
-            state[movie_id] = now.isoformat()
-            started.append(movie["title"])
-            continue
+        if profile_id == strict_id:
+            seen_strict.add(movie_id)
 
-        first_seen = datetime.fromisoformat(state[movie_id])
-        if now - first_seen >= timedelta(days=WAIT_DAYS):
-            api("PUT", f"/api/v3/movie/{movie_id}", {**movie, "qualityProfileId": fallback_id})
-            api("POST", "/api/v3/command", {"name": "MoviesSearch", "movieIds": [movie["id"]]})
-            switched.append(movie["title"])
-            del state[movie_id]
+            if movie_id not in waiting_strict:
+                waiting_strict[movie_id] = now.isoformat()
+                started.append(movie["title"])
+                continue
 
-    # Drop tracking for anything no longer pending on the strict profile
-    # (upgraded already, or profile changed manually).
-    for movie_id in list(state):
-        if movie_id not in seen_ids:
+            first_seen = datetime.fromisoformat(waiting_strict[movie_id])
+            if now - first_seen >= timedelta(days=WAIT_DAYS):
+                api("PUT", f"/api/v3/movie/{movie_id}", {**movie, "qualityProfileId": fallback_id})
+                api("POST", "/api/v3/command", {"name": "MoviesSearch", "movieIds": [movie["id"]]})
+                switched.append(movie["title"])
+                del waiting_strict[movie_id]
+                waiting_fallback[movie_id] = now.isoformat()
+
+        elif profile_id == fallback_id:
+            seen_fallback.add(movie_id)
+
+            if movie_id not in waiting_fallback:
+                # Just switched (or manually put) on the fallback profile --
+                # it was already searched at switch time, so start the clock now.
+                waiting_fallback[movie_id] = now.isoformat()
+                continue
+
+            last_searched = datetime.fromisoformat(waiting_fallback[movie_id])
+            if now - last_searched >= timedelta(days=WAIT_DAYS):
+                api("POST", "/api/v3/command", {"name": "MoviesSearch", "movieIds": [movie["id"]]})
+                researched.append(movie["title"])
+                waiting_fallback[movie_id] = now.isoformat()
+
+    # Drop tracking for anything no longer pending on the profile we tracked it
+    # under (upgraded to Bluray already, or profile changed manually).
+    for movie_id in list(waiting_strict):
+        if movie_id not in seen_strict:
             cleaned.append(movie_id)
-            del state[movie_id]
+            del waiting_strict[movie_id]
+    for movie_id in list(waiting_fallback):
+        if movie_id not in seen_fallback:
+            cleaned.append(movie_id)
+            del waiting_fallback[movie_id]
 
     save_state(state)
 
-    print(f"Started tracking {len(started)} movie(s): {started}")
+    print(f"Started tracking {len(started)} movie(s) newly stuck on strict profile: {started}")
     print(f"Switched {len(switched)} movie(s) to fallback profile after {WAIT_DAYS}d: {switched}")
+    print(f"Re-searched {len(researched)} movie(s) still on fallback profile after {WAIT_DAYS}d: {researched}")
     print(f"Cleaned up {len(cleaned)} stale tracking entr(y/ies).")
-    print(f"Currently tracking {len(state)} movie(s) still waiting on Bluray.")
+    print(f"Currently tracking {len(waiting_strict)} on strict profile, {len(waiting_fallback)} on fallback profile.")
 ---
 apiVersion: batch/v1
 kind: CronJob
