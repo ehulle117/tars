@@ -32,21 +32,21 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: k3s-worker-case
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: overseerr
-          image: lscr.io/linuxserver/overseerr:latest
+          image: ghcr.io/seerr-team/seerr:latest
           env:
-            - name: PUID
-              value: "1000"
-            - name: PGID
-              value: "1000"
             - name: TZ
               value: "America/New_York"
           ports:
             - containerPort: 5055
           volumeMounts:
             - name: config
-              mountPath: /config
+              mountPath: /app/config
       volumes:
         - name: config
           persistentVolumeClaim:
