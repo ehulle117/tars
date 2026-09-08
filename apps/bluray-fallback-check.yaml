@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bluray-fallback-check-script
+  namespace: apps
+data:
+  check.py: |
+    import json
+    import os
+    import urllib.request
+    from datetime import datetime, timezone, timedelta
+
+    RADARR_HOST = "radarr-svc.apps.svc.cluster.local"
+    RADARR_PORT = 7878
+    RADARR_API_KEY = os.environ["RADARR_API_KEY"]
+
+    STRICT_PROFILE_NAME = "Bluray"
+    FALLBACK_PROFILE_NAME = "Bluray or WebDL (fallback)"
+    WAIT_DAYS = 7
+    STATE_PATH = "/state/.bluray-fallback-state.json"
+
+    BLURAY_QUALITY_MARKERS = ("Bluray", "Remux", "BR-DISK")
+
+
+    def api(method, path, body=None):
+        url = f"http://{RADARR_HOST}:{RADARR_PORT}{path}"
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method, headers={
+            "X-Api-Key": RADARR_API_KEY,
+            "Content-Type": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else None
+
+
+    def load_state():
+        try:
+            with open(STATE_PATH) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+
+
+    def save_state(state):
+        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+        with open(STATE_PATH, "w") as f:
+            json.dump(state, f, indent=2, sort_keys=True)
+
+
+    def is_bluray_quality(name):
+        return bool(name) and any(marker in name for marker in BLURAY_QUALITY_MARKERS)
+
+
+    profiles = api("GET", "/api/v3/qualityprofile")
+    strict_id = next(p["id"] for p in profiles if p["name"] == STRICT_PROFILE_NAME)
+    fallback_id = next(p["id"] for p in profiles if p["name"] == FALLBACK_PROFILE_NAME)
+
+    movies = api("GET", "/api/v3/movie")
+    now = datetime.now(timezone.utc)
+    state = load_state()
+    seen_ids = set()
+    started, switched, cleaned = [], [], []
+
+    for movie in movies:
+        if movie.get("qualityProfileId") != strict_id:
+            continue
+
+        current_quality = (movie.get("movieFile") or {}).get("quality", {}).get("quality", {}).get("name", "")
+        if is_bluray_quality(current_quality):
+            continue
+
+        movie_id = str(movie["id"])
+        seen_ids.add(movie_id)
+
+        if movie_id not in state:
+            state[movie_id] = now.isoformat()
+            started.append(movie["title"])
+            continue
+
+        first_seen = datetime.fromisoformat(state[movie_id])
+        if now - first_seen >= timedelta(days=WAIT_DAYS):
+            api("PUT", f"/api/v3/movie/{movie_id}", {**movie, "qualityProfileId": fallback_id})
+            api("POST", "/api/v3/command", {"name": "MoviesSearch", "movieIds": [movie["id"]]})
+            switched.append(movie["title"])
+            del state[movie_id]
+
+    # Drop tracking for anything no longer pending on the strict profile
+    # (upgraded already, or profile changed manually).
+    for movie_id in list(state):
+        if movie_id not in seen_ids:
+            cleaned.append(movie_id)
+            del state[movie_id]
+
+    save_state(state)
+
+    print(f"Started tracking {len(started)} movie(s): {started}")
+    print(f"Switched {len(switched)} movie(s) to fallback profile after {WAIT_DAYS}d: {switched}")
+    print(f"Cleaned up {len(cleaned)} stale tracking entr(y/ies).")
+    print(f"Currently tracking {len(state)} movie(s) still waiting on Bluray.")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bluray-fallback-check
+  namespace: apps
+spec:
+  schedule: "0 10 * * *" # 10 AM daily
+  timeZone: "America/New_York"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: bluray-fallback-check
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py"]
+            env:
+            - name: RADARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: RADARR_API_KEY
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: state
+              mountPath: /state
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: bluray-fallback-check-script
+          - name: state
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc
