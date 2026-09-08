@@ -6,6 +6,10 @@
 #
 # Pinned to k3s-worker-case (amd64, most headroom) rather than the Pi
 # worker, which is memory-constrained.
+#
+# /root/.claude.json (auth/session state) lives outside the mounted
+# /root/.claude/ dir by default, so it's symlinked into the PVC on
+# startup to survive pod restarts.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -63,6 +67,8 @@ spec:
               apt-get update && \
               apt-get install -y --no-install-recommends git openssh-client ca-certificates curl ripgrep && \
               npm install -g @anthropic-ai/claude-code && \
+              [ -e /root/.claude.json ] && [ ! -L /root/.claude.json ] && mv /root/.claude.json /root/.claude/claude.json; \
+              ln -sf /root/.claude/claude.json /root/.claude.json && \
               sleep infinity
           env:
             - name: TZ
