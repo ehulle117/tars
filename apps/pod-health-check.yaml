@@ -39,6 +39,7 @@ data:
     import json
     import os
     import ssl
+    import subprocess
     import urllib.request
     from datetime import datetime, timezone
 
@@ -106,14 +107,13 @@ data:
         body = "**Pod health check found issues:**\n" + "\n".join(f"- {i}" for i in issues[:25])
         if len(issues) > 25:
             body += f"\n...and {len(issues) - 25} more"
-        req = urllib.request.Request(
-            DISCORD_WEBHOOK,
-            data=json.dumps({"content": body}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        # Discord's edge blocks Python urllib's TLS/HTTP fingerprint with a 403;
+        # shelling out to busybox wget (present in python:3.12-alpine) avoids it.
+        subprocess.run(
+            ["wget", "-q", "-O-", "--header=Content-Type: application/json",
+             "--post-data", json.dumps({"content": body}), DISCORD_WEBHOOK],
+            check=True, timeout=15,
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            resp.read()
         print(f"Posted {len(issues)} issue(s) to Discord.")
 ---
 apiVersion: batch/v1
