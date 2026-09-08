@@ -222,6 +222,15 @@ data:
             server.sendmail(SMTP_USERNAME, [MAIL_TO], msg.as_string())
 
         print(f"Sent report with {issue_count} issue(s).")
+
+        # Also drop a copy for pod-health-check to drain and triage via
+        # Claude/gh - this job can't co-locate with the Claude config PVC
+        # (no need to add a nodeSelector just for this).
+        queue_dir = "/queue/.tars-triage-queue"
+        os.makedirs(queue_dir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        with open(f"{queue_dir}/arr-queue-check-{stamp}.txt", "w") as f:
+            f.write(text_body)
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -283,8 +292,13 @@ spec:
             volumeMounts:
             - name: script
               mountPath: /scripts
+            - name: triage-queue
+              mountPath: /queue
           restartPolicy: OnFailure
           volumes:
           - name: script
             configMap:
               name: arr-queue-check-script
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc

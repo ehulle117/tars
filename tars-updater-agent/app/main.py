@@ -1,6 +1,8 @@
+import os
 import time
 import schedule
 import logging
+from datetime import datetime
 from app.config import config
 from app.scanners.k8s_scanner import get_running_containers, check_image_updates
 from app.scanners.trivy_scanner import scan_image
@@ -13,6 +15,17 @@ from app.notifiers.email import send_email
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+def queue_for_triage(source, text):
+    # pod-health-check drains this alongside its own findings and runs it
+    # through Claude/gh triage - this service can't co-locate with the
+    # Claude config PVC, so it just drops a file here instead.
+    queue_dir = "/queue/.tars-triage-queue"
+    os.makedirs(queue_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    with open(f"{queue_dir}/{source}-{stamp}.txt", "w") as f:
+        f.write(text)
+
 
 def daily_job():
     logger.info("Starting daily scan job...")
@@ -37,6 +50,8 @@ def daily_job():
             template_name="critical_alert.html",
             context={"vulnerabilities": new_criticals}
         )
+        lines = [f"New critical CVE: {v['cve_id']} in {v['target']}" for v in new_criticals]
+        queue_for_triage("tars-updater-critical-cve", "\n".join(lines))
     else:
         logger.info("Daily scan complete. No new critical vulnerabilities.")
 
