@@ -76,4 +76,20 @@ Discord channel via webhook.
   `tars-apps` and `tars-storage` Applications so manual drift (like a
   live-patched container that isn't in git) gets reverted automatically
   instead of silently persisting.
+- **`uptime-kuma-push` Secret** (`apps` namespace): one push-monitor URL per
+  key (`pod_health_check_url`, `resource_pressure_check_url`,
+  `tars_appdata_backup_url`, `case_worker_appdata_backup_url`,
+  `pi_appdata_backup_url`), created out-of-band. `pod-health-check` and
+  `resource-pressure-check` ping their URL unconditionally at the end of
+  every run (after any Discord post); the three backup CronJobs ping only
+  on success. This catches a job crashing or silently failing to run at
+  all — a case the Discord-only alerting above can't see, since a crashed
+  script never reaches its own "post to Discord" step. The five Push
+  monitors are configured in Uptime Kuma itself (not tracked in git), with
+  the existing Discord notification attached.
+
+**Note on testing changes here**: because `selfHeal: true` is on, a live
+`kubectl apply` against anything Argo CD manages gets silently reverted
+back to match `main` within moments — validate with `--dry-run=client`,
+but expect a live functional test to require actually merging first.
 

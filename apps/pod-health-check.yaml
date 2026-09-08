@@ -115,6 +115,10 @@ data:
             check=True, timeout=15,
         )
         print(f"Posted {len(issues)} issue(s) to Discord.")
+
+    # Heartbeat to Uptime Kuma so a crashed/never-ran job (which wouldn't reach
+    # this line) shows as down, instead of failing silently.
+    subprocess.run(["wget", "-q", "-O-", os.environ["KUMA_PUSH_URL"]], check=True, timeout=15)
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -141,6 +145,11 @@ spec:
                 secretKeyRef:
                   name: discord-alerts
                   key: webhook_url
+            - name: KUMA_PUSH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: uptime-kuma-push
+                  key: pod_health_check_url
             volumeMounts:
             - name: script
               mountPath: /scripts
