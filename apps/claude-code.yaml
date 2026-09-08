@@ -1,0 +1,89 @@
+# Claude Code CLI - persistent dev pod you `kubectl exec` into.
+#
+# Not a service - there's nothing to route to it. It just sleeps, and you
+# shell in with:
+#   kubectl exec -it -n apps deploy/claude-code -- claude
+#
+# Pinned to k3s-worker-case (amd64, most headroom) rather than the Pi
+# worker, which is memory-constrained.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: claude-code-workspace-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: claude-code-config-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-code
+  namespace: apps
+  labels:
+    app: claude-code
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: claude-code
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: claude-code
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-case
+      containers:
+        - name: claude-code
+          image: node:22-bookworm-slim
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apt-get update && \
+              apt-get install -y --no-install-recommends git openssh-client ca-certificates curl ripgrep && \
+              npm install -g @anthropic-ai/claude-code && \
+              sleep infinity
+          env:
+            - name: TZ
+              value: "America/New_York"
+          workingDir: /workspace
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: claude-config
+              mountPath: /root/.claude
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: claude-code-workspace-pvc
+        - name: claude-config
+          persistentVolumeClaim:
+            claimName: claude-code-config-pvc
