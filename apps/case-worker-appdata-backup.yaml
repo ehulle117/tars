@@ -22,15 +22,29 @@ spec:
                 - /bin/sh
                 - -c
                 - |
-                  set -e
-                  echo "Starting backup of k3s local-path storage on k3s-worker-case..."
-                  DATE=$(date +%Y-%m-%d_%H-%M-%S)
-                  mkdir -p /destination/case_worker_k8s_appdata
-                  tar -czf /destination/case_worker_k8s_appdata/backup_${DATE}.tar.gz -C /source .
-                  echo "Backup completed successfully: backup_${DATE}.tar.gz"
-                  echo "Cleaning up backups older than 7 days..."
-                  find /destination/case_worker_k8s_appdata -name "backup_*.tar.gz" -mtime +7 -delete
-                  echo "Cleanup complete."
+                  run() {
+                    set -e
+                    echo "Starting backup of k3s local-path storage on k3s-worker-case..."
+                    DATE=$(date +%Y-%m-%d_%H-%M-%S)
+                    mkdir -p /destination/case_worker_k8s_appdata
+                    tar -czf /destination/case_worker_k8s_appdata/backup_${DATE}.tar.gz -C /source .
+                    echo "Backup completed successfully: backup_${DATE}.tar.gz"
+                    echo "Cleaning up backups older than 7 days..."
+                    find /destination/case_worker_k8s_appdata -name "backup_*.tar.gz" -mtime +7 -delete
+                    echo "Cleanup complete."
+                  }
+                  if ! run; then
+                    wget -q -O- --header="Content-Type: application/json" \
+                      --post-data="{\"content\": \"**case-worker-appdata-backup failed** on host k3s-worker-case\"}" \
+                      "$DISCORD_WEBHOOK_URL" >/dev/null 2>&1
+                    exit 1
+                  fi
+              env:
+                - name: DISCORD_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: discord-alerts
+                      key: webhook_url
               volumeMounts:
                 - name: source-data
                   mountPath: /source
