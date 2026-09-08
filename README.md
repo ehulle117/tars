@@ -68,9 +68,11 @@ Discord channel via webhook.
 
 - **`discord-alerts` Secret** (`apps` namespace): created out-of-band like
   `smtp-auth`, not committed. Keys: `webhook_url` (the three
-  `*-appdata-backup` CronJobs), `recommendations_webhook_url` (the
-  `tars-insight-digest` scheduled AI digest), and
-  `tracked_issues_webhook_url` (Claude-triaged alerts, below).
+  `*-appdata-backup` CronJobs' direct failure alert), `recommendations_webhook_url`
+  (the `tars-insight-digest` scheduled AI digest), and `bot_token` (the
+  `Tars` Discord bot — Claude-triaged alerts, below; note this is a bot
+  token, not a webhook URL, despite living in this same Secret for
+  convenience).
 - **Argo CD notifications**: configured directly on the cluster in
   `argocd-notifications-cm` / `argocd-notifications-secret` (namespace
   `argocd`) — outside this repo's GitOps scope, since it configures Argo CD
@@ -134,10 +136,22 @@ Either way, once there's something to triage, Claude checks `gh issue list`
 for an existing open issue covering the finding before deciding whether to
 open a new one, comment on the existing one, or conclude it's not actually
 worth tracking. Claude's final response is a single Discord-ready line,
-posted to a **Discord Forum channel** via the `tracked_issues_webhook_url`
-key (forum webhooks require a `thread_name` field per message to create a
-new post) — kept separate from the regular alerts channel so tracked issues
-don't mix with raw noise.
+posted via the **`Tars` Discord bot** (not a webhook) as a new Forum post
+using `POST /channels/{id}/threads`. Which of three Forum channels depends
+on the finding's source — `pod-health-check`'s/`resource-pressure-check`'s
+own findings and the appdata-backup queue files share one general
+tracked-issues channel; `arr-queue-check` and `tars-updater-agent`'s
+critical-CVE queue files each get their own dedicated channel — kept
+separate from the regular alerts channel so tracked issues don't mix with
+raw noise, and from each other so they're independently readable.
+
+A bot (rather than a webhook) is what makes routing to three different
+channels straightforward: one bot token can post to any channel it has
+permission in, whereas each destination would otherwise need its own
+webhook. `bot_token` (`discord-alerts` Secret) is the same bot used for
+the resolved-issue reaction below — invited to the server once, with Send
+Messages/Create Posts in Forums/Add Reactions granted broadly (simplest
+for a personal homelab; scoping per-channel is possible if desired).
 
 Needs, on top of what `pod-health-check`/`resource-pressure-check` already
 require:
@@ -148,29 +162,33 @@ require:
   wired into Argo CD's repo credentials, reused here for `gh issue`
   read/write access via `GH_TOKEN`
 - `GITHUB_REPO` env var (`ehulle117/tars`)
+- `TRACKED_ISSUES_CHANNEL_ID` / `ARR_QUEUE_CHANNEL_ID` /
+  `UPDATER_AGENT_CHANNEL_ID` env vars (plain channel ID values, not secret)
 - Queue writers need `nfs-media-pvc` mounted (most already have it) and
-  write to `<mount>/.tars-triage-queue/<source>-<timestamp>.txt`
+  write to `<mount>/.tars-triage-queue/<source>-<timestamp>.txt` — the
+  filename prefix (`arr-queue-check-`, `tars-updater-critical-cve-`, or
+  anything else) is what routes a queued finding to the right channel
 
 ### Resolved-issue notice back to Discord
 
-When Claude opens a new tracked issue, the webhook post uses `?wait=true`
-to get the created Forum thread's id *and* the original message's id back,
-then stashes both in the issue body as invisible HTML comments
-(`<!-- discord_thread_id: ... discord_message_id: ... -->`) via one
-`gh issue edit` call. [`.github/workflows/issue-closed-notify.yml`](.github/workflows/issue-closed-notify.yml)
+When Claude opens a new tracked issue, the bot's `POST /channels/{id}/threads`
+response includes both the created Forum thread's id *and* the original
+message's id, which get stashed in the issue body as invisible HTML
+comments (`<!-- discord_thread_id: ... discord_message_id: ... -->`) via
+one `gh issue edit` call. [`.github/workflows/issue-closed-notify.yml`](.github/workflows/issue-closed-notify.yml)
 triggers whenever any issue in this repo closes, looks for those markers,
 and — only if present — posts a "✅ Resolved" follow-up into that exact
 thread and adds a ✅ reaction directly on the original message (a no-op for
 any issue without the markers, e.g. one filed by hand, or opened before
 this existed).
 
-The follow-up message only needs the existing webhook (`DISCORD_TRACKED_ISSUES_WEBHOOK_URL`
-repo secret — same URL as the `tracked_issues_webhook_url` Secret key
-above), but adding a *reaction* to an existing message isn't something a
-webhook can do at all — that needs `DISCORD_BOT_TOKEN`, a real Discord bot
-(created via the Discord Developer Portal, invited to the server with
-View Channels/Read Message History/Add Reactions scoped to that one Forum
-channel). Both are repo secrets, separate from anything in-cluster since
+Both steps use the bot (`DISCORD_BOT_TOKEN` repo secret — a real Discord
+bot created via the Discord Developer Portal, invited to the server with
+Send Messages/Create Posts in Forums/Add Reactions), not a webhook — a
+webhook can only post into threads under its own parent channel, and
+findings now route to one of three different channels, so the bot's
+"post to any channel I have access to" is what makes this work without a
+separate webhook per channel. Separate from anything in-cluster since
 Actions runs on GitHub's infrastructure, not Tars.
 
 A recurring problem — Claude decides to comment on an existing issue

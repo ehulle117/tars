@@ -44,6 +44,67 @@ data:
     import urllib.request
     from datetime import datetime, timezone
 
+    BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
+
+
+    def discord_post(path, payload):
+        # Discord's edge blocks Python urllib's TLS/HTTP fingerprint with a
+        # 403; shelling out to busybox wget (present in python:3.12-alpine)
+        # avoids it.
+        result = subprocess.run(
+            ["wget", "-q", "-O-", "--header=Authorization: Bot " + BOT_TOKEN,
+             "--header=Content-Type: application/json",
+             "--post-data", json.dumps(payload),
+             f"https://discord.com/api/v10{path}"],
+            check=True, timeout=15, capture_output=True, text=True,
+        )
+        return json.loads(result.stdout)
+
+
+    def post_and_track(channel_id, source_label, message, repo):
+        """Posts a triage decision to Discord (new Forum post, or a reply in
+        an existing issue's original thread for a recurring finding), and
+        stashes the thread+message id on a newly-opened issue so
+        issue-closed-notify.yml can find it again later."""
+        commented = re.search(rf"Commented on {re.escape(repo)}#(\d+)", message)
+        existing_thread_id = None
+        if commented:
+            try:
+                existing_body = subprocess.run(
+                    ["gh", "issue", "view", commented.group(1), "--repo", repo, "--json", "body", "-q", ".body"],
+                    capture_output=True, text=True, timeout=30, check=True,
+                ).stdout
+                found = re.search(r"discord_thread_id: (\d+)", existing_body)
+                if found:
+                    existing_thread_id = found.group(1)
+            except Exception as e:
+                print(f"Couldn't look up existing issue's thread (falling back to a new post): {e}")
+
+        if existing_thread_id:
+            posted = discord_post(f"/channels/{existing_thread_id}/messages", {"content": message})
+            thread_id, message_id = existing_thread_id, posted["id"]
+        else:
+            thread_name = f"{source_label}: {message[:80]}"
+            posted = discord_post(f"/channels/{channel_id}/threads",
+                                   {"name": thread_name, "message": {"content": message}})
+            thread_id, message_id = posted["id"], posted["message"]["id"]
+
+        opened = re.search(rf"Opened {re.escape(repo)}#(\d+)", message)
+        if opened:
+            try:
+                issue_num = opened.group(1)
+                current_body = subprocess.run(
+                    ["gh", "issue", "view", issue_num, "--repo", repo, "--json", "body", "-q", ".body"],
+                    capture_output=True, text=True, timeout=30, check=True,
+                ).stdout
+                subprocess.run(
+                    ["gh", "issue", "edit", issue_num, "--repo", repo, "--body",
+                     f"{current_body}\n\n<!-- discord_thread_id: {thread_id} discord_message_id: {message_id} -->"],
+                    check=True, timeout=30,
+                )
+            except Exception as e:
+                print(f"Couldn't stash Discord thread id on the new issue (non-fatal): {e}")
+
     with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
         TOKEN = f.read().strip()
     with open("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", "rb") as f:
@@ -120,24 +181,42 @@ data:
     # Other jobs that can't co-locate with the Claude config PVC (different
     # node, or no PVC mount at all) drop a small text file here instead of
     # triaging themselves - this run drains it alongside its own findings so
-    # all Claude/gh work happens in one place. Consumed only after a
-    # successful triage+post below, so a failed run leaves files for retry.
+    # all Claude/gh work happens in one place. Each source routes to its own
+    # Discord channel; arr-queue-check and tars-updater-agent's critical-CVE
+    # alert get dedicated channels, everything else (this job's own findings,
+    # plus the appdata-backup CronJobs' failure queue files) shares the
+    # general tracked-issues channel. Consumed only after a successful
+    # triage+post, so a failed run leaves files for retry.
+    GROUPS = {
+        "pod-health-check": {"channel_id": os.environ["TRACKED_ISSUES_CHANNEL_ID"], "findings": list(issues), "files": []},
+        "arr-queue-check": {"channel_id": os.environ["ARR_QUEUE_CHANNEL_ID"], "findings": [], "files": []},
+        "tars-updater-critical-cve": {"channel_id": os.environ["UPDATER_AGENT_CHANNEL_ID"], "findings": [], "files": []},
+    }
     QUEUE_DIR = "/queue/.tars-triage-queue"
-    queued_files = []
     if os.path.isdir(QUEUE_DIR):
         for fname in sorted(os.listdir(QUEUE_DIR)):
             fpath = os.path.join(QUEUE_DIR, fname)
             with open(fpath) as f:
                 content = f.read().strip()
+            if fname.startswith("arr-queue-check"):
+                group = "arr-queue-check"
+            elif fname.startswith("tars-updater-critical-cve"):
+                group = "tars-updater-critical-cve"
+            else:
+                group = "pod-health-check"
             if content:
-                issues.append(f"[from {fname}]\n{content}")
-            queued_files.append(fpath)
+                GROUPS[group]["findings"].append(f"[from {fname}]\n{content}")
+            GROUPS[group]["files"].append(fpath)
 
-    if not issues:
+    PROMPT_CONTEXT = {
+        "pod-health-check": "the tars cluster's pod-health-check (runs every 15 minutes) and/or an appdata-backup CronJob failure",
+        "arr-queue-check": "the tars cluster's arr-queue-check (runs daily, checks the *arr stack for stuck imports and failing indexers)",
+        "tars-updater-critical-cve": "a new critical CVE found by tars-updater-agent's daily vulnerability scan",
+    }
+
+    if not any(g["findings"] for g in GROUPS.values()):
         print("All pods healthy. Skipping Discord notification.")
     else:
-        raw_findings = "\n".join(f"- {i}" for i in issues[:25])
-
         # Bootstrap Claude Code + gh CLI only when there's actually something
         # to triage - the common "all healthy" case above never pays this cost.
         subprocess.run(["sh", "-c",
@@ -156,97 +235,40 @@ data:
         ], check=True, timeout=180)
 
         repo = os.environ["GITHUB_REPO"]
-        prompt = (
-            "You are triaging a finding from the tars cluster's pod-health-check "
-            "(runs every 15 minutes; this only fires when it finds something):\n\n"
-            f"{raw_findings}\n\n"
-            f'Use `gh issue list --repo {repo} --state open --search "<keywords>"` '
-            "to check whether an open issue already tracks this. Then:\n"
-            "- If it's a genuine, actionable problem with NO existing matching issue: open one with "
-            f'`gh issue create --repo {repo} --title "..." --body "..."`.\n'
-            "- If it's a genuine problem that already HAS a matching open issue: add a short comment "
-            f'with `gh issue comment <number> --repo {repo} --body "..."` noting '
-            "it's still occurring, rather than opening a duplicate.\n"
-            "- If it's not actually worth tracking (transient, already resolving, etc.): do nothing on GitHub.\n\n"
-            "Your FINAL response must be exactly one short line of Discord-ready plain text summarizing "
-            f'what you did (e.g. "Opened {repo}#12: ..." or "Commented on '
-            f'{repo}#12 (still occurring)" or "Not tracked - looks transient: ...").\n'
-            "No other commentary before or after it."
-        )
 
-        result = subprocess.run(
-            ["claude", "-p", prompt, "--allowedTools", "Bash(gh *)"],
-            capture_output=True, text=True, timeout=180, check=True,
-        )
-        message = result.stdout.strip() or raw_findings
+        for group_name, group in GROUPS.items():
+            if not group["findings"]:
+                continue
 
-        # Tracked-issue triage results go to a Discord Forum channel, not the
-        # regular alerts text channel. A brand-new finding creates a new
-        # Forum post (thread_name); a recurring one that Claude commented on
-        # an EXISTING issue for should land as a reply in that issue's
-        # original thread instead of spawning a new post each time - so look
-        # up its stashed discord_thread_id marker first. ?wait=true makes
-        # Discord return the created message (incl. channel_id, the thread's
-        # id) instead of firing-and-forgetting, so a newly-opened issue's
-        # thread can be found again later.
-        webhook_base = os.environ["TRACKED_ISSUES_WEBHOOK_URL"]
-        post_data = {"content": message}
+            raw_findings = "\n".join(f"- {i}" for i in group["findings"][:25])
+            prompt = (
+                f"You are triaging a finding from {PROMPT_CONTEXT[group_name]}:\n\n"
+                f"{raw_findings}\n\n"
+                f'Use `gh issue list --repo {repo} --state open --search "<keywords>"` '
+                "to check whether an open issue already tracks this. Then:\n"
+                "- If it's a genuine, actionable problem with NO existing matching issue: open one with "
+                f'`gh issue create --repo {repo} --title "..." --body "..."`.\n'
+                "- If it's a genuine problem that already HAS a matching open issue: add a short comment "
+                f'with `gh issue comment <number> --repo {repo} --body "..."` noting '
+                "it's still occurring, rather than opening a duplicate.\n"
+                "- If it's not actually worth tracking (transient, already resolving, etc.): do nothing on GitHub.\n\n"
+                "Your FINAL response must be exactly one short line of Discord-ready plain text summarizing "
+                f'what you did (e.g. "Opened {repo}#12: ..." or "Commented on '
+                f'{repo}#12 (still occurring)" or "Not tracked - looks transient: ...").\n'
+                "No other commentary before or after it."
+            )
 
-        commented = re.search(rf"Commented on {re.escape(repo)}#(\d+)", message)
-        existing_thread_id = None
-        if commented:
-            try:
-                existing_body = subprocess.run(
-                    ["gh", "issue", "view", commented.group(1), "--repo", repo, "--json", "body", "-q", ".body"],
-                    capture_output=True, text=True, timeout=30, check=True,
-                ).stdout
-                found = re.search(r"discord_thread_id: (\d+)", existing_body)
-                if found:
-                    existing_thread_id = found.group(1)
-            except Exception as e:
-                print(f"Couldn't look up existing issue's thread (falling back to a new post): {e}")
+            result = subprocess.run(
+                ["claude", "-p", prompt, "--allowedTools", "Bash(gh *)"],
+                capture_output=True, text=True, timeout=180, check=True,
+            )
+            message = result.stdout.strip() or raw_findings
 
-        if existing_thread_id:
-            webhook_url = f"{webhook_base}?thread_id={existing_thread_id}&wait=true"
-        else:
-            post_data["thread_name"] = f"pod-health-check: {message[:80]}"
-            webhook_url = f"{webhook_base}?wait=true"
+            post_and_track(group["channel_id"], group_name, message, repo)
+            print(f"[{group_name}] {len(group['findings'])} finding(s), triaged: {message}")
 
-        # Discord's edge blocks Python urllib's TLS/HTTP fingerprint with a 403;
-        # shelling out to busybox wget (present in python:3.12-alpine) avoids it.
-        post = subprocess.run(
-            ["wget", "-q", "-O-", "--header=Content-Type: application/json",
-             "--post-data", json.dumps(post_data), webhook_url],
-            check=True, timeout=15, capture_output=True, text=True,
-        )
-        print(f"Posted {len(issues)} issue(s), triaged: {message}")
-
-        # If Claude opened a new issue, stash this thread+message id in the
-        # issue body (invisible HTML comment) so a GitHub Actions workflow
-        # can find it again and post a "Resolved" notice + react with a
-        # checkmark on the original message when the issue closes - see
-        # .github/workflows/issue-closed-notify.yml.
-        opened = re.search(rf"Opened {re.escape(repo)}#(\d+)", message)
-        if opened:
-            try:
-                posted = json.loads(post.stdout)
-                thread_id = posted["channel_id"]
-                message_id = posted["id"]
-                issue_num = opened.group(1)
-                current_body = subprocess.run(
-                    ["gh", "issue", "view", issue_num, "--repo", repo, "--json", "body", "-q", ".body"],
-                    capture_output=True, text=True, timeout=30, check=True,
-                ).stdout
-                subprocess.run(
-                    ["gh", "issue", "edit", issue_num, "--repo", repo, "--body",
-                     f"{current_body}\n\n<!-- discord_thread_id: {thread_id} discord_message_id: {message_id} -->"],
-                    check=True, timeout=30,
-                )
-            except Exception as e:
-                print(f"Couldn't stash Discord thread id on the new issue (non-fatal): {e}")
-
-        for fpath in queued_files:
-            os.remove(fpath)
+            for fpath in group["files"]:
+                os.remove(fpath)
 
     # Heartbeat to Uptime Kuma so a crashed/never-ran job (which wouldn't reach
     # this line) shows as down, instead of failing silently.
@@ -277,11 +299,17 @@ spec:
             image: python:3.12-alpine
             command: ["python", "/scripts/check.py"]
             env:
-            - name: TRACKED_ISSUES_WEBHOOK_URL
+            - name: DISCORD_BOT_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: discord-alerts
-                  key: tracked_issues_webhook_url
+                  key: bot_token
+            - name: TRACKED_ISSUES_CHANNEL_ID
+              value: "1546905058099331202"
+            - name: ARR_QUEUE_CHANNEL_ID
+              value: "1546985887232036914"
+            - name: UPDATER_AGENT_CHANNEL_ID
+              value: "1546986016861192202"
             - name: KUMA_PUSH_URL
               valueFrom:
                 secretKeyRef:
