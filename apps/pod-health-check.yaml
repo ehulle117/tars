@@ -49,7 +49,6 @@ data:
         CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 
     API = "https://kubernetes.default.svc"
-    DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK_URL"]
 
     PENDING_MINUTES_THRESHOLD = 15
     RESTART_COUNT_THRESHOLD = 5
@@ -80,20 +79,20 @@ data:
         phase = pod["status"].get("phase")
         full = f"{ns}/{name}"
 
-        if phase == "Pending":
-            created = pod["metadata"].get("creationTimestamp")
-            if created and minutes_since(created) >= PENDING_MINUTES_THRESHOLD:
-                issues.append(f"`{full}` stuck Pending for {minutes_since(created):.0f}m")
-            continue
-
         if phase == "Unknown":
             issues.append(f"`{full}` in Unknown state")
             continue
 
+        # A crashlooping/image-pull-failing pod is always phase=Pending (its
+        # container never reaches Running), so bad waiting reasons must be
+        # checked before any Pending-specific handling - otherwise a pod
+        # crashlooping for under PENDING_MINUTES_THRESHOLD is invisible here.
+        has_bad_reason = False
         for cs in pod["status"].get("containerStatuses", []):
             waiting = cs.get("state", {}).get("waiting")
             if waiting and waiting.get("reason") in BAD_WAITING_REASONS:
                 issues.append(f"`{full}` container `{cs['name']}`: {waiting['reason']} - {waiting.get('message', '')[:120]}")
+                has_bad_reason = True
 
             # Only alert on a restart-based condition if the most recent
             # restart was actually recent - restartCount never resets on its
@@ -112,20 +111,71 @@ data:
                     f"most recently {minutes_since(finished_at):.0f}m ago"
                 )
 
+        if phase == "Pending" and not has_bad_reason:
+            created = pod["metadata"].get("creationTimestamp")
+            if created and minutes_since(created) >= PENDING_MINUTES_THRESHOLD:
+                issues.append(f"`{full}` stuck Pending for {minutes_since(created):.0f}m")
+
     if not issues:
         print("All pods healthy. Skipping Discord notification.")
     else:
-        body = "**Pod health check found issues:**\n" + "\n".join(f"- {i}" for i in issues[:25])
-        if len(issues) > 25:
-            body += f"\n...and {len(issues) - 25} more"
+        raw_findings = "\n".join(f"- {i}" for i in issues[:25])
+
+        # Bootstrap Claude Code + gh CLI only when there's actually something
+        # to triage - the common "all healthy" case above never pays this cost.
+        subprocess.run(["sh", "-c",
+            "apk add --no-cache nodejs npm bash curl tar && "
+            "npm install -g @anthropic-ai/claude-code && "
+            "GH_VERSION=$(curl -s https://api.github.com/repos/cli/cli/releases/latest | "
+            "  grep tag_name | cut -d'\"' -f4 | tr -d v) && "
+            "curl -L -o /tmp/gh.tar.gz https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz && "
+            "tar -xzf /tmp/gh.tar.gz -C /tmp && "
+            "install -m 0755 /tmp/gh_${GH_VERSION}_linux_amd64/bin/gh /usr/local/bin/gh && "
+            # Same fix as the claude-code dev pod (apps/claude-code.yaml): auth
+            # config lives at ~/.claude.json, outside the mounted ~/.claude/
+            # dir, so it's symlinked to the copy the dev pod already persisted.
+            "[ -e /root/.claude.json ] && [ ! -L /root/.claude.json ] && mv /root/.claude.json /root/.claude/claude.json; "
+            "ln -sf /root/.claude/claude.json /root/.claude.json"
+        ], check=True, timeout=180)
+
+        repo = os.environ["GITHUB_REPO"]
+        prompt = (
+            "You are triaging a finding from the tars cluster's pod-health-check "
+            "(runs every 15 minutes; this only fires when it finds something):\n\n"
+            f"{raw_findings}\n\n"
+            f'Use `gh issue list --repo {repo} --state open --search "<keywords>"` '
+            "to check whether an open issue already tracks this. Then:\n"
+            "- If it's a genuine, actionable problem with NO existing matching issue: open one with "
+            f'`gh issue create --repo {repo} --title "..." --body "..."`.\n'
+            "- If it's a genuine problem that already HAS a matching open issue: add a short comment "
+            f'with `gh issue comment <number> --repo {repo} --body "..."` noting '
+            "it's still occurring, rather than opening a duplicate.\n"
+            "- If it's not actually worth tracking (transient, already resolving, etc.): do nothing on GitHub.\n\n"
+            "Your FINAL response must be exactly one short line of Discord-ready plain text summarizing "
+            f'what you did (e.g. "Opened {repo}#12: ..." or "Commented on '
+            f'{repo}#12 (still occurring)" or "Not tracked - looks transient: ...").\n'
+            "No other commentary before or after it."
+        )
+
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--allowedTools", "Bash(gh *)"],
+            capture_output=True, text=True, timeout=180, check=True,
+        )
+        message = result.stdout.strip() or raw_findings
+
+        # Tracked-issue triage results go to a Discord Forum channel, not the
+        # regular alerts text channel - forum webhooks require thread_name to
+        # create a new post per message.
+        thread_name = f"pod-health-check: {message[:80]}"
         # Discord's edge blocks Python urllib's TLS/HTTP fingerprint with a 403;
         # shelling out to busybox wget (present in python:3.12-alpine) avoids it.
         subprocess.run(
             ["wget", "-q", "-O-", "--header=Content-Type: application/json",
-             "--post-data", json.dumps({"content": body}), DISCORD_WEBHOOK],
+             "--post-data", json.dumps({"content": message, "thread_name": thread_name}),
+             os.environ["TRACKED_ISSUES_WEBHOOK_URL"]],
             check=True, timeout=15,
         )
-        print(f"Posted {len(issues)} issue(s) to Discord.")
+        print(f"Posted {len(issues)} issue(s), triaged: {message}")
 
     # Heartbeat to Uptime Kuma so a crashed/never-ran job (which wouldn't reach
     # this line) shows as down, instead of failing silently.
@@ -146,25 +196,44 @@ spec:
         spec:
           serviceAccountName: cluster-health-checker
           restartPolicy: OnFailure
+          # Co-located with the claude-code dev pod's config PVC (below) so
+          # triage can reuse its existing Claude Code login - no separate
+          # Anthropic API key/billing.
+          nodeSelector:
+            kubernetes.io/hostname: k3s-worker-case
           containers:
           - name: pod-health-check
             image: python:3.12-alpine
             command: ["python", "/scripts/check.py"]
             env:
-            - name: DISCORD_WEBHOOK_URL
+            - name: TRACKED_ISSUES_WEBHOOK_URL
               valueFrom:
                 secretKeyRef:
                   name: discord-alerts
-                  key: webhook_url
+                  key: tracked_issues_webhook_url
             - name: KUMA_PUSH_URL
               valueFrom:
                 secretKeyRef:
                   name: uptime-kuma-push
                   key: pod_health_check_url
+            - name: GH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: github-pat
+                  key: token
+            - name: GITHUB_REPO
+              value: "ehulle117/tars"
+            - name: HOME
+              value: "/root"
             volumeMounts:
             - name: script
               mountPath: /scripts
+            - name: claude-config
+              mountPath: /root/.claude
           volumes:
           - name: script
             configMap:
               name: pod-health-check-script
+          - name: claude-config
+            persistentVolumeClaim:
+              claimName: claude-code-config-pvc
