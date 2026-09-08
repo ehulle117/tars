@@ -53,6 +53,7 @@ data:
 
     PENDING_MINUTES_THRESHOLD = 15
     RESTART_COUNT_THRESHOLD = 5
+    RECENT_RESTART_WINDOW_MINUTES = 24 * 60
     BAD_WAITING_REASONS = {"CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "InvalidImageName"}
 
     ctx = ssl.create_default_context(cafile=CA_PATH)
@@ -94,12 +95,22 @@ data:
             if waiting and waiting.get("reason") in BAD_WAITING_REASONS:
                 issues.append(f"`{full}` container `{cs['name']}`: {waiting['reason']} - {waiting.get('message', '')[:120]}")
 
+            # Only alert on a restart-based condition if the most recent
+            # restart was actually recent - restartCount never resets on its
+            # own, so without this a pod that restarted once, weeks ago,
+            # would re-trigger an identical alert on every single run forever.
             terminated = cs.get("lastState", {}).get("terminated")
-            if terminated and terminated.get("reason") == "OOMKilled":
-                issues.append(f"`{full}` container `{cs['name']}`: last killed OOMKilled")
+            finished_at = terminated.get("finishedAt") if terminated else None
+            recent_restart = finished_at and minutes_since(finished_at) <= RECENT_RESTART_WINDOW_MINUTES
 
-            if cs.get("restartCount", 0) >= RESTART_COUNT_THRESHOLD:
-                issues.append(f"`{full}` container `{cs['name']}`: {cs['restartCount']} restarts")
+            if terminated and terminated.get("reason") == "OOMKilled" and recent_restart:
+                issues.append(f"`{full}` container `{cs['name']}`: OOMKilled {minutes_since(finished_at):.0f}m ago")
+
+            if cs.get("restartCount", 0) >= RESTART_COUNT_THRESHOLD and recent_restart:
+                issues.append(
+                    f"`{full}` container `{cs['name']}`: {cs['restartCount']} restarts, "
+                    f"most recently {minutes_since(finished_at):.0f}m ago"
+                )
 
     if not issues:
         print("All pods healthy. Skipping Discord notification.")
