@@ -61,22 +61,32 @@ data:
         return json.loads(result.stdout)
 
 
-    def post_and_track(channel_id, source_label, message, repo):
+    def post_and_track(channel_id, source_label, message, repo, action=None, issue_num=None):
         """Posts a triage decision to Discord (new Forum post, or a reply in
         an existing issue's original thread for a recurring finding), and
         stashes the thread+message id on a newly-opened issue so
-        issue-closed-notify.yml can find it again later."""
-        commented = re.search(rf"Commented on {re.escape(repo)}#(\d+)", message)
+        issue-closed-notify.yml can find it again later.
+
+        action/issue_num come from a strict machine-parsed status line (see
+        run_triage), not from regexing this free-form message - the model
+        doesn't reliably reproduce exact prose like "Commented on {repo}#12"
+        in its final summary, which silently broke thread reuse/stashing for
+        recurring findings (100% of recurring comments on tars#44 and #45
+        used other wording) and caused every recurring finding to open a
+        fresh, orphaned Discord thread instead of replying to the original.
+        """
         existing_thread_id = None
-        if commented:
+        if action == "commented" and issue_num:
             try:
                 existing_body = subprocess.run(
-                    ["gh", "issue", "view", commented.group(1), "--repo", repo, "--json", "body", "-q", ".body"],
+                    ["gh", "issue", "view", issue_num, "--repo", repo, "--json", "body", "-q", ".body"],
                     capture_output=True, text=True, timeout=30, check=True,
                 ).stdout
                 found = re.search(r"discord_thread_id: (\d+)", existing_body)
                 if found:
                     existing_thread_id = found.group(1)
+                else:
+                    print(f"Issue #{issue_num} has no discord_thread_id stashed; posting a new thread instead")
             except Exception as e:
                 print(f"Couldn't look up existing issue's thread (falling back to a new post): {e}")
 
@@ -89,10 +99,8 @@ data:
                                    {"name": thread_name, "message": {"content": message}})
             thread_id, message_id = posted["id"], posted["message"]["id"]
 
-        opened = re.search(rf"Opened {re.escape(repo)}#(\d+)", message)
-        if opened:
+        if action == "opened" and issue_num:
             try:
-                issue_num = opened.group(1)
                 current_body = subprocess.run(
                     ["gh", "issue", "view", issue_num, "--repo", repo, "--json", "body", "-q", ".body"],
                     capture_output=True, text=True, timeout=30, check=True,
@@ -104,6 +112,39 @@ data:
                 )
             except Exception as e:
                 print(f"Couldn't stash Discord thread id on the new issue (non-fatal): {e}")
+
+
+    def run_triage(prompt):
+        """Runs the Claude triage prompt and splits its output into the
+        Discord-ready message and a strict, separately-parsed status line
+        (see the prompt's format) telling us exactly what it did on GitHub.
+        Falls back to (message, None, None) if the status line is missing or
+        doesn't parse - this only means thread-reuse/stashing is skipped for
+        that run (same as today's behavior), not a hard failure."""
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--allowedTools", "Bash(gh *)"],
+            capture_output=True, text=True, timeout=180, check=True,
+        )
+        raw = result.stdout.strip()
+
+        message, status_line = raw, ""
+        if "\n---\n" in raw:
+            message_part, _, status_part = raw.rpartition("\n---\n")
+            message = message_part.strip()
+            status_line = status_part.strip().splitlines()[0].strip() if status_part.strip() else ""
+
+        action = issue_num = None
+        m = re.match(r"OPENED\s+(\d+)", status_line)
+        if m:
+            action, issue_num = "opened", m.group(1)
+        else:
+            m = re.match(r"COMMENTED\s+(\d+)", status_line)
+            if m:
+                action, issue_num = "commented", m.group(1)
+            elif not re.match(r"SKIPPED", status_line):
+                print(f"Couldn't parse triage status line ({status_line!r}); posting without thread-reuse/stashing")
+
+        return message, action, issue_num
 
     with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
         TOKEN = f.read().strip()
@@ -252,19 +293,23 @@ data:
                 f'with `gh issue comment <number> --repo {repo} --body "..."` noting '
                 "it's still occurring, rather than opening a duplicate.\n"
                 "- If it's not actually worth tracking (transient, already resolving, etc.): do nothing on GitHub.\n\n"
-                "Your FINAL response must be exactly one short line of Discord-ready plain text summarizing "
-                f'what you did (e.g. "Opened {repo}#12: ..." or "Commented on '
-                f'{repo}#12 (still occurring)" or "Not tracked - looks transient: ...").\n'
-                "No other commentary before or after it."
+                "Your response must end with EXACTLY this format - a short line or two of Discord-ready plain "
+                "text summarizing the finding and what you did, then a line containing only three dashes, then "
+                "ONE final status line in one of these three exact forms (no other text after it):\n"
+                "OPENED <issue-number>\n"
+                "COMMENTED <issue-number>\n"
+                "SKIPPED\n\n"
+                "Example:\n"
+                "Opened an issue for the recurring OOMKilled restarts on radarr.\n"
+                "---\n"
+                "OPENED 52\n\n"
+                "No other commentary before, after, or around this."
             )
 
-            result = subprocess.run(
-                ["claude", "-p", prompt, "--allowedTools", "Bash(gh *)"],
-                capture_output=True, text=True, timeout=180, check=True,
-            )
-            message = result.stdout.strip() or raw_findings
+            message, action, issue_num = run_triage(prompt)
+            message = message or raw_findings
 
-            post_and_track(group["channel_id"], group_name, message, repo)
+            post_and_track(group["channel_id"], group_name, message, repo, action, issue_num)
             print(f"[{group_name}] {len(group['findings'])} finding(s), triaged: {message}")
 
             for fpath in group["files"]:
