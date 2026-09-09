@@ -84,7 +84,7 @@ data:
             posted = discord_post(f"/channels/{existing_thread_id}/messages", {"content": message})
             thread_id, message_id = existing_thread_id, posted["id"]
         else:
-            thread_name = f"{source_label}: {message[:80]}"
+            thread_name = f"{source_label}: {message}"[:100]
             posted = discord_post(f"/channels/{channel_id}/threads",
                                    {"name": thread_name, "message": {"content": message}})
             thread_id, message_id = posted["id"], posted["message"]["id"]
