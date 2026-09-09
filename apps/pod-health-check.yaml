@@ -41,10 +41,31 @@ data:
     import re
     import ssl
     import subprocess
+    import time
     import urllib.request
     from datetime import datetime, timezone
 
     BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
+
+
+    def run_with_retries(cmd, attempts=3, delay_seconds=10, **kwargs):
+        """Retries a subprocess call a few times before giving up. Added
+        after tars#48: the bootstrap step below hits several external
+        services (apk mirror, npm registry, GitHub releases) from a fresh
+        container every run, and a single flaky one was causing full pod
+        restarts (each restarting the whole container from scratch) instead
+        of a quick in-process retry - tars#48 needed 5 restarts across ~4
+        minutes before one attempt's downloads all happened to succeed."""
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return subprocess.run(cmd, check=True, **kwargs)
+            except subprocess.CalledProcessError as e:
+                last_error = e
+                if attempt < attempts:
+                    print(f"Attempt {attempt}/{attempts} failed ({e}), retrying in {delay_seconds}s...")
+                    time.sleep(delay_seconds)
+        raise last_error
 
 
     def discord_post(path, payload):
@@ -260,7 +281,11 @@ data:
     else:
         # Bootstrap Claude Code + gh CLI only when there's actually something
         # to triage - the common "all healthy" case above never pays this cost.
-        subprocess.run(["sh", "-c",
+        # Retried as a whole (see run_with_retries/tars#48): a transient
+        # failure partway through (a flaky mirror, a GitHub API hiccup) is
+        # cheap to just redo entirely, rather than relying on the pod
+        # restarting from scratch.
+        run_with_retries(["sh", "-c",
             "apk add --no-cache nodejs npm bash curl tar && "
             "npm install -g @anthropic-ai/claude-code && "
             "GH_VERSION=$(curl -s https://api.github.com/repos/cli/cli/releases/latest | "
@@ -273,7 +298,7 @@ data:
             # dir, so it's symlinked to the copy the dev pod already persisted.
             "[ -e /root/.claude.json ] && [ ! -L /root/.claude.json ] && mv /root/.claude.json /root/.claude/claude.json; "
             "ln -sf /root/.claude/claude.json /root/.claude.json"
-        ], check=True, timeout=180)
+        ], timeout=180)
 
         repo = os.environ["GITHUB_REPO"]
 
