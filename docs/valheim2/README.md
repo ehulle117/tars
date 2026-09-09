@@ -8,7 +8,7 @@ deployment.
 
 - **Manifests:** [`apps/valheim2.yaml`](../../apps/valheim2.yaml)
 - **Player-facing guide:** [`CONNECT.md`](./CONNECT.md) — send this to friends
-- **Image:** [`ghcr.io/lloesche/valheim-server`](https://github.com/lloesche/valheim-server-docker)
+- **Image:** [`ghcr.io/community-valheim-tools/valheim-server`](https://github.com/community-valheim-tools/valheim-server-docker) — a maintained fork of the now-stale `lloesche/valheim-server-docker`
 
 Everything about how this works — the Tailscale sidecar networking, backup
 behavior, update behavior, resource sizing, and troubleshooting — is identical

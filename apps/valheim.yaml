@@ -87,7 +87,10 @@ spec:
       serviceAccountName: valheim-tailscale
       containers:
         - name: valheim
-          image: ghcr.io/lloesche/valheim-server:latest
+          # lloesche/valheim-server-docker is unmaintained; the project moved
+          # to community-valheim-tools, which is the one that actually ships
+          # 1.0 support (chunked world save dirs).
+          image: ghcr.io/community-valheim-tools/valheim-server:latest
           env:
             - name: SERVER_NAME
               valueFrom:

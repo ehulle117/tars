@@ -5,7 +5,7 @@ from outside the LAN over Tailscale.
 
 - **Manifests:** [`apps/valheim.yaml`](../../apps/valheim.yaml)
 - **Player-facing guide:** [`CONNECT.md`](./CONNECT.md) — send this to friends
-- **Image:** [`ghcr.io/lloesche/valheim-server`](https://github.com/lloesche/valheim-server-docker)
+- **Image:** [`ghcr.io/community-valheim-tools/valheim-server`](https://github.com/community-valheim-tools/valheim-server-docker) — a maintained fork of the now-stale `lloesche/valheim-server-docker`
 
 ## How the networking works
 
