@@ -1,4 +1,4 @@
-# How to join the Valheim 1.0 server
+# How to join "Ashlands Ascendant" (the Valheim 1.0 server)
 
 This is the new 1.0 world — a separate server from the original one, so it
 needs its own setup even if you already joined the old server. If you already

@@ -1,7 +1,7 @@
-# Valheim 1.0 Server on Tars
+# Ashlands Ascendant — Valheim 1.0 Server on Tars
 
 A second Valheim dedicated server running on the Tars k3s cluster, for the new
-1.0 world. Deployed alongside the original server (`apps/valheim.yaml`,
+1.0 world, named **Ashlands Ascendant** after 1.0's headline addition. Deployed alongside the original server (`apps/valheim.yaml`,
 [docs/valheim/README.md](../valheim/README.md)) so the old world stays up
 until we're done with it — this is not a migration, it's a second, independent
 deployment.
@@ -48,8 +48,8 @@ kubectl create secret generic valheim2-tailscale-auth \
 
 kubectl create secret generic valheim2-server \
   --namespace apps \
-  --from-literal=SERVER_NAME='Tars Valheim 1.0' \
-  --from-literal=WORLD_NAME='NewWorld' \
+  --from-literal=SERVER_NAME='Ashlands Ascendant' \
+  --from-literal=WORLD_NAME='Ashlands' \
   --from-literal=SERVER_PASS='changeme' \
   --from-literal=ADMINLIST_IDS='76561198000000000'
 ```
