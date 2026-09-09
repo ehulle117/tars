@@ -165,6 +165,14 @@ data:
             elif not re.match(r"SKIPPED", status_line):
                 print(f"Couldn't parse triage status line ({status_line!r}); posting without thread-reuse/stashing")
 
+        # Always logged, not just on parse failure - the printed Discord
+        # message deliberately has the status line stripped out of it, so
+        # without this there's no way to tell after the fact whether a run
+        # with no visible "---" in its logs actually got a clean SKIPPED
+        # (or OPENED/COMMENTED) versus something unparseable, which made a
+        # prior debugging session chase a phantom bug.
+        print(f"Resolved triage status: status_line={status_line!r} action={action!r} issue_num={issue_num!r}")
+
         return message, action, issue_num
 
     with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
