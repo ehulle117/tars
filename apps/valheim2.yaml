@@ -244,3 +244,21 @@ spec:
       protocol: UDP
       port: 2459
       targetPort: 2459
+---
+# ClusterIP-only, so it doesn't touch the LoadBalancer host-port conflict noted
+# above. Gives in-cluster consumers (e.g. Uptime Kuma) a stable address for the
+# status endpoint instead of the pod IP, which changes on every restart.
+apiVersion: v1
+kind: Service
+metadata:
+  name: valheim2-status-svc
+  namespace: apps
+spec:
+  type: ClusterIP
+  selector:
+    app: valheim2
+  ports:
+    - name: status
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
