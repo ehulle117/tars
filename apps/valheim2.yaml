@@ -103,6 +103,14 @@ spec:
                 secretKeyRef:
                   name: valheim2-server
                   key: WORLD_NAME
+            # Pinned rather than left blank so this world's seed is a known,
+            # freshly-generated value instead of whatever the container would
+            # otherwise pick on first boot.
+            - name: WORLD_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: valheim2-server
+                  key: WORLD_SEED
             - name: SERVER_PASS
               valueFrom:
                 secretKeyRef:
@@ -186,8 +194,11 @@ spec:
                   key: TS_AUTHKEY
             - name: TS_KUBE_SECRET
               value: valheim2-tailscale-state
+            # DNS labels can't contain a dot, so "ashlands.ascendant" becomes
+            # "ashlands-ascendant" -- the MagicDNS name ends up
+            # ashlands-ascendant.<tailnet>.ts.net.
             - name: TS_HOSTNAME
-              value: valheim2
+              value: ashlands-ascendant
             # Kernel networking. Userspace mode proxies TCP well but is a poor
             # fit for a latency-sensitive UDP game server.
             - name: TS_USERSPACE

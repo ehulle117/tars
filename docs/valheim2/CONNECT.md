@@ -88,7 +88,7 @@ it sometimes disconnects after your computer restarts or an update.
 
 You may not have finished Step 3. Ask whoever runs the server to check
 [login.tailscale.com/admin/machines](https://login.tailscale.com/admin/machines)
-for a device named `valheim2` and confirm you're listed as someone it's shared
+for a device named `ashlands-ascendant` and confirm you're listed as someone it's shared
 with. If not, ask for a new share link — they expire after 30 days.
 
 **"Incorrect password" even though you're sure it's right**

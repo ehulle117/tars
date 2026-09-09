@@ -22,7 +22,7 @@ the full explanation; only the differences are called out below.
 | --- | --- | --- |
 | Deployment / pod | `valheim` | `valheim2` |
 | Game / query ports | UDP 2456 / 2457 | UDP 2458 / 2459 |
-| Tailscale hostname | `valheim` | `valheim2` |
+| Tailscale hostname | `valheim` | `ashlands-ascendant` (MagicDNS: `ashlands-ascendant.<tailnet>.ts.net`) |
 | Config/server PVCs | `valheim-config-pvc` / `valheim-server-pvc` | `valheim2-config-pvc` / `valheim2-server-pvc` |
 | Backup directory | `/backups/valheim` | `/backups/valheim2` |
 | Secrets | `valheim-server`, `valheim-tailscale-auth`, `valheim-tailscale-state` | `valheim2-server`, `valheim2-tailscale-auth`, `valheim2-tailscale-state` |
@@ -50,6 +50,7 @@ kubectl create secret generic valheim2-server \
   --namespace apps \
   --from-literal=SERVER_NAME='Ashlands Ascendant' \
   --from-literal=WORLD_NAME='Ashlands' \
+  --from-literal=WORLD_SEED='B021FLFQEI' \
   --from-literal=SERVER_PASS='changeme' \
   --from-literal=ADMINLIST_IDS='76561198000000000'
 ```
@@ -60,6 +61,14 @@ world *filename* (pick the real 1.0 world name before first boot — changing it
 later creates a new world rather than renaming), and `ADMINLIST_IDS` is
 space-separated SteamID64s from [steamid.io](https://steamid.io).
 
+`WORLD_SEED` is pinned rather than left blank so we know we're getting a
+brand-new, freshly-generated seed for the 1.0 world rather than whatever the
+container would otherwise pick (or, worse, an accidentally-reused old value).
+`B021FLFQEI` above was freshly randomly generated for this deployment — swap
+it for a different one if you'd rather pick your own, but don't reuse the
+original world's seed. Worth writing the final value down somewhere (e.g. the project's Obsidian
+note) since it can't be recovered from the running world later.
+
 ### 2. Approve the device and find its tailnet IP
 
 ```sh
@@ -67,8 +76,8 @@ kubectl -n apps logs -f deploy/valheim2 -c valheim
 kubectl -n apps exec deploy/valheim2 -c tailscale -- tailscale ip -4
 ```
 
-Approve the `valheim2` device in the Tailscale admin console (**Machines**) if
-device approval is enabled.
+Approve the `ashlands-ascendant` device in the Tailscale admin console
+(**Machines**) if device approval is enabled.
 
 ### 3. Add the access rule
 
@@ -78,7 +87,7 @@ Same as the original, but scoped to the new ports and IP:
 "grants": [
   {
     "src": ["autogroup:shared"],
-    "dst": ["100.x.y.z"],   // valheim2's tailnet IP
+    "dst": ["100.x.y.z"],   // ashlands-ascendant's tailnet IP
     "ip":  ["udp:2458-2459"],
   },
 ],
@@ -86,11 +95,11 @@ Same as the original, but scoped to the new ports and IP:
 
 ### 4. Share the node with each friend
 
-**Admin console → Machines → `valheim2` → ⋯ → Share…**
+**Admin console → Machines → `ashlands-ascendant` → ⋯ → Share…**
 
 ### 5. Disable key expiry on the node
 
-**Admin console → Machines → `valheim2` → ⋯ → Disable key expiry**
+**Admin console → Machines → `ashlands-ascendant` → ⋯ → Disable key expiry**
 
 ### 6. Send the connect guide
 
