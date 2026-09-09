@@ -61,6 +61,7 @@ spec:
       containers:
         - name: claude-code
           image: node:22-bookworm-slim
+          imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
             - |
