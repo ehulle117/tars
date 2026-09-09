@@ -70,6 +70,7 @@ spec:
           containers:
             - name: tars-insight-digest
               image: node:22-bookworm-slim
+              imagePullPolicy: Always
               command: ["/bin/sh", "-c"]
               args:
                 - |
