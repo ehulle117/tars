@@ -73,10 +73,9 @@ metadata:
   labels:
     app: valheim
 spec:
-  # Spun down 2026-09-10: unused (0 player connections, broken worlds_local/
-  # Midgard save dir). PVCs (world/config saves) and everything else below are
-  # left in place in case we bring it back later.
-  replicas: 0
+  # Scaled back up 2026-09-10 on k3s-worker-case after migrating its PVCs
+  # there (was spun down/moved while unused -- see git history).
+  replicas: 1
   selector:
     matchLabels:
       app: valheim
