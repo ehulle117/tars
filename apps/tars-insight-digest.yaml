@@ -61,6 +61,11 @@ spec:
   jobTemplate:
     spec:
       activeDeadlineSeconds: 900
+      # Default is 6. Every retry re-runs the whole apt/npm/kubectl setup
+      # *and* a fresh Claude assessment, so a permanent failure (e.g. a
+      # revoked Discord webhook) used to burn six full digest runs before
+      # the Job gave up. Two retries still absorbs a transient blip.
+      backoffLimit: 2
       template:
         spec:
           serviceAccountName: tars-insight-vm
@@ -89,7 +94,22 @@ spec:
                   claude -p "$(cat /prompt/prompt.md)" --allowedTools "Bash(kubectl *)" > /tmp/digest.txt
 
                   PAYLOAD=$(jq -n --arg content "$(cat /tmp/digest.txt)" '{content: $content}')
-                  wget -q -O- --header="Content-Type: application/json" --post-data "$PAYLOAD" "$RECOMMENDATIONS_WEBHOOK_URL"
+
+                  # Report the webhook's HTTP status explicitly. `wget -q` exits
+                  # non-zero with no output on an error response, so when this
+                  # webhook was deleted the 404 ("Unknown Webhook") surfaced only
+                  # as a bare container crash -- indistinguishable in the logs
+                  # from apt/npm/claude failing, which sent triage down the wrong
+                  # path for three run cycles. Print the status and body instead.
+                  HTTP_CODE=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' \
+                    -H "Content-Type: application/json" \
+                    -d "$PAYLOAD" "$RECOMMENDATIONS_WEBHOOK_URL" || echo 000)
+                  if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+                    echo "Discord webhook POST failed: HTTP $HTTP_CODE" >&2
+                    cat /tmp/resp.txt >&2
+                    exit 1
+                  fi
+                  echo "Digest posted to Discord (HTTP $HTTP_CODE)."
               env:
                 - name: TZ
                   value: "America/New_York"
