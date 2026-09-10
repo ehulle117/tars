@@ -37,7 +37,7 @@ All workloads run in the `apps` namespace unless noted.
 | Pod health check | [`apps/pod-health-check.yaml`](apps/pod-health-check.yaml) | `python:3.12-alpine` | CronJob, every 15 min, flags CrashLoopBackOff/ImagePullBackOff/OOMKilled/high-restart/stuck-Pending pods cluster-wide. Read-only via the `cluster-health-checker` ClusterRole. When it finds something, Claude Code triages it (checks for an existing open GitHub issue via `gh`, opens/comments/skips accordingly) and posts the resulting one-line decision to a Discord Forum channel — see "Claude-triaged alerts" below. |
 | Resource pressure check | [`apps/resource-pressure-check.yaml`](apps/resource-pressure-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, checks node CPU/memory (via metrics-server) and DiskPressure/MemoryPressure conditions, plus Case's NFS export disk usage above 90%. Same Claude-triage-on-finding behavior as Pod health check above. |
 | Claude Code dev pod | [`apps/claude-code.yaml`](apps/claude-code.yaml) | `node:22-bookworm-slim` + `@anthropic-ai/claude-code` | Persistent pod you `kubectl exec` into for interactive Claude Code sessions against this repo/cluster. Not a service — just `sleep infinity` with PVCs for `/workspace` and `~/.claude` so login survives restarts. |
-| Insight digest | [`apps/tars-insight-digest.yaml`](apps/tars-insight-digest.yaml) | same image as the dev pod above | CronJob, every 6h, has Claude Code itself (no separate Anthropic API billing — reuses the dev pod's login via the shared `claude-code-config-pvc`) read cluster state and judge real issues vs. noise, posting a curated digest to a dedicated Discord channel. Read-only via the `tars-insight-vm` ServiceAccount (created out-of-band, not in this repo) — Claude never sees the webhook URL or posts to Discord itself; a plain shell step outside its tool loop does that, since Claude Code's own Bash-tool safety check refuses to expand env vars that look like secrets. |
+| Insight digest | [`apps/tars-insight-digest.yaml`](apps/tars-insight-digest.yaml) | same image as the dev pod above | CronJob, every 6h, has Claude Code itself (no separate Anthropic API billing — reuses the dev pod's login via the shared `claude-code-config-pvc`) read cluster state and judge real issues vs. noise, posting a curated digest to a dedicated Discord channel. Read-only via the `tars-insight-vm` ServiceAccount (created out-of-band, not in this repo) — Claude never sees the bot token or posts to Discord itself; a plain shell step outside its tool loop does that, since Claude Code's own Bash-tool safety check refuses to expand env vars that look like secrets. |
 
 ## Storage
 
@@ -67,14 +67,18 @@ Discord channel via webhook.
 
 - **`discord-alerts` Secret** (`apps` namespace): created out-of-band, not
   committed. Keys: `webhook_url` (the three
-  `*-appdata-backup` CronJobs' direct failure alert), `recommendations_webhook_url`
-  (the `tars-insight-digest` scheduled AI digest), and `bot_token` (the
-  `Tars` Discord bot — Claude-triaged alerts, below; note this is a bot
-  token, not a webhook URL, despite living in this same Secret for
-  convenience).
-- **`DIGEST_CHANNEL_ID`** (plain env var, not a Secret — channel IDs aren't
-  sensitive): the text channel `tars-updater-agent`'s weekly OS/update
-  digest posts to via the bot. Currently `1547598576111194205`.
+  `*-appdata-backup` CronJobs' direct failure alert) and `bot_token` (the
+  `Tars` Discord bot — used for everything else below, including
+  `tars-insight-digest`'s recommendations, which used to post via a
+  separate `recommendations_webhook_url` webhook until that webhook was
+  deleted server-side; see issue #63).
+- **Bot-posted digest channels** (plain env vars, not Secrets — channel IDs
+  aren't sensitive), each a dedicated Forum channel so the two feeds don't
+  mix:
+  - `DIGEST_CHANNEL_ID` (`1547598576111194205`, "k8s-updates"):
+    `tars-updater-agent`'s weekly OS/container update digest.
+  - `RECOMMENDATIONS_CHANNEL_ID` (`1547614601506463906`,
+    "insight-recommendations"): `tars-insight-digest`'s scheduled AI digest.
 - All alerting is now Discord-only — the `smtp-auth` Secret is no longer
   referenced anywhere in this repo and can be deleted from the cluster.
 - **Argo CD notifications**: configured directly on the cluster in
