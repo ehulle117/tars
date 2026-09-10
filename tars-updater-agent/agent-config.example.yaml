@@ -1,11 +1,6 @@
-smtp:
-  host: "smtp.example.com"
-  port: 587
-  username: "ehulle117@gmail.com"
-  # password is read from SMTP_PASSWORD env var
-  from_address: "ehulle117@gmail.com"
-  to_address: "ehulle117@gmail.com"
-  tls: true
+# Discord posting is configured via env vars, not this file:
+#   DISCORD_BOT_TOKEN   - Tars bot token (discord-alerts Secret, key bot_token)
+#   DIGEST_CHANNEL_ID   - plain text channel the weekly digest posts to
 
 schedule:
   daily_scan_time: "02:00"

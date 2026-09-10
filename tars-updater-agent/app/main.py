@@ -11,7 +11,7 @@ from app.storage.db import (
     has_cve_been_reported, mark_cve_reported,
     record_vulnerability_finding, record_update_finding,
 )
-from app.notifiers.email import send_email
+from app.notifiers.discord import post_digest_thread, format_weekly_digest
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -42,14 +42,11 @@ def daily_job():
                 new_criticals.append(v)
                 mark_cve_reported(v["cve_id"], v["target"])
                 
-    # 2. Dispatch alert if necessary
+    # 2. Queue for Claude triage if necessary - pod-health-check drains this
+    # and posts the triaged result to Discord (UPDATER_AGENT_CHANNEL_ID via
+    # the Tars bot). No direct alert here; the queue IS the alert path.
     if new_criticals:
-        logger.warning(f"Found {len(new_criticals)} new critical vulnerabilities. Dispatching alert.")
-        send_email(
-            subject="🚨 CRITICAL SECURITY ALERT - Tars Updater",
-            template_name="critical_alert.html",
-            context={"vulnerabilities": new_criticals}
-        )
+        logger.warning(f"Found {len(new_criticals)} new critical vulnerabilities. Queuing for triage.")
         lines = [f"New critical CVE: {v['cve_id']} in {v['target']}" for v in new_criticals]
         queue_for_triage("tars-updater-critical-cve", "\n".join(lines))
     else:
@@ -65,20 +62,17 @@ def weekly_job():
     containers = get_running_containers()
     container_updates = check_image_updates(containers)
 
-    # 3. Persist findings so they survive beyond the email inbox
+    # 3. Persist findings so they survive beyond the digest post
     for item in os_updates + container_updates:
         record_update_finding(item)
 
-    # 4. Dispatch Digest Email
-    send_email(
-        subject="📅 Tars Weekly Update Digest",
-        template_name="weekly_digest.html",
-        context={
-            "os_updates": os_updates,
-            "container_updates": container_updates
-        }
-    )
-    logger.info("Weekly digest dispatched.")
+    # 4. Post digest to Discord - routine informational summary, not a
+    # problem report, so this posts directly to a plain channel rather than
+    # going through the Claude-triage queue (see repo README's Alerting
+    # section).
+    digest = format_weekly_digest(os_updates, container_updates)
+    post_digest_thread(os.environ.get("DIGEST_CHANNEL_ID"), digest)
+    logger.info("Weekly digest posted to Discord.")
 
 def main():
     daily_time = config.get("schedule", {}).get("daily_scan_time", "02:00")
