@@ -73,7 +73,10 @@ metadata:
   labels:
     app: valheim
 spec:
-  replicas: 1
+  # Spun down 2026-09-10: unused (0 player connections, broken worlds_local/
+  # Midgard save dir). PVCs (world/config saves) and everything else below are
+  # left in place in case we bring it back later.
+  replicas: 0
   selector:
     matchLabels:
       app: valheim
