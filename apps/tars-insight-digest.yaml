@@ -87,25 +87,37 @@ spec:
                   npm install -g @anthropic-ai/claude-code
 
                   # Claude only assesses and writes the digest to a file - it never
-                  # sees the webhook URL. Claude Code's own Bash-tool safety check
-                  # refuses to expand env vars that look like secrets (WEBHOOK_URL
+                  # sees the bot token. Claude Code's own Bash-tool safety check
+                  # refuses to expand env vars that look like secrets (BOT_TOKEN
                   # matches that pattern) even for a value this benign, so posting
                   # to Discord happens here, in plain shell, outside its tool loop.
                   claude -p "$(cat /prompt/prompt.md)" --allowedTools "Bash(kubectl *)" > /tmp/digest.txt
 
-                  PAYLOAD=$(jq -n --arg content "$(cat /tmp/digest.txt)" '{content: $content}')
+                  # Posts via the Tars bot rather than an incoming webhook - the
+                  # standalone webhook this used before was deleted out-of-band
+                  # with no warning, and every other check in this repo
+                  # (pod-health-check, resource-pressure-check) already posts
+                  # through the bot for the same reason: a bot token tied to an
+                  # app we control doesn't silently disappear the way a webhook
+                  # can. RECOMMENDATIONS_CHANNEL_ID is a forum channel, so
+                  # posting means starting a thread (POST .../threads with a
+                  # name + message), not a plain channel message.
+                  FIRST_LINE=$(head -n1 /tmp/digest.txt)
+                  THREAD_NAME=$(printf '%s' "insight-digest: $FIRST_LINE" | cut -c1-100)
+                  PAYLOAD=$(jq -n --arg name "$THREAD_NAME" --arg content "$(cat /tmp/digest.txt)" \
+                    '{name: $name, message: {content: $content}}')
 
-                  # Report the webhook's HTTP status explicitly. `wget -q` exits
-                  # non-zero with no output on an error response, so when this
-                  # webhook was deleted the 404 ("Unknown Webhook") surfaced only
-                  # as a bare container crash -- indistinguishable in the logs
-                  # from apt/npm/claude failing, which sent triage down the wrong
-                  # path for three run cycles. Print the status and body instead.
+                  # Report Discord's HTTP status explicitly rather than trusting
+                  # a bare exit code - see #63, where a silent webhook failure
+                  # was indistinguishable in the logs from the setup steps
+                  # failing and sent triage down the wrong path for days.
                   HTTP_CODE=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' \
+                    -H "Authorization: Bot $BOT_TOKEN" \
                     -H "Content-Type: application/json" \
-                    -d "$PAYLOAD" "$RECOMMENDATIONS_WEBHOOK_URL" || echo 000)
+                    -d "$PAYLOAD" \
+                    "https://discord.com/api/v10/channels/$RECOMMENDATIONS_CHANNEL_ID/threads" || echo 000)
                   if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-                    echo "Discord webhook POST failed: HTTP $HTTP_CODE" >&2
+                    echo "Discord post failed: HTTP $HTTP_CODE" >&2
                     cat /tmp/resp.txt >&2
                     exit 1
                   fi
@@ -113,11 +125,13 @@ spec:
               env:
                 - name: TZ
                   value: "America/New_York"
-                - name: RECOMMENDATIONS_WEBHOOK_URL
+                - name: BOT_TOKEN
                   valueFrom:
                     secretKeyRef:
                       name: discord-alerts
-                      key: recommendations_webhook_url
+                      key: bot_token
+                - name: RECOMMENDATIONS_CHANNEL_ID
+                  value: "1547598576111194205"
               volumeMounts:
                 - name: claude-config
                   mountPath: /root/.claude
