@@ -24,7 +24,6 @@ flowchart TB
             arrstack["*arr stack\nSonarr / Radarr / Lidarr / Readarr\nProwlarr / Overseerr / Fetcharr"]
             deluge["Deluge\n(+ FlareSolverr)"]
             arm["ARM\n(disc ripper, needs /dev/sr0)"]
-            hortusfox["HortusFox\n(app + mariadb)\n+ cron sidecars"]
             kuma["Uptime Kuma"]
             valheim["Valheim\n(+ tailscale sidecar)"]
             updater["tars-updater-agent\n(Trivy scans, update digest)"]
@@ -46,8 +45,7 @@ flowchart TB
     valheim <-->|UDP over WireGuard,\nshared pod netns| tailnet
     friend <--> tailnet
 
-    updater -->|daily email| smtp[("SMTP\nsmtp.gmail.com")]
-    hortusfox -->|daily digest email| smtp
+    updater -->|weekly digest| discordbot["Discord\n(Tars bot)"]
     kuma -.->|health checks| appsns
 ```
 
@@ -71,8 +69,8 @@ sequenceDiagram
 
 ## Storage model
 
-- **Config/state** (app settings, databases like the HortusFox mariadb
-  volume): `local-path` PVCs, backed by disk local to the k3s node. Covered
+- **Config/state** (app settings, databases): `local-path` PVCs, backed by
+  disk local to the k3s node. Covered
   by the daily `tars-appdata-backup` CronJob ([`apps/backup-cronjob.yaml`](../apps/backup-cronjob.yaml)).
 - **Media** (`nfs-media-pvc`, `ReadWriteMany`): NFS export from Case at
   `192.168.8.152:/mnt/user/data`, mounted into every media-handling app
@@ -89,7 +87,8 @@ sequenceDiagram
   *arr stack; FlareSolverr sits in front of indexers that use Cloudflare
   challenges.
 - **tars-updater-agent**: a custom-built (not off-the-shelf) service —
-  scans running container images with Trivy daily, and emails a weekly
-  digest of pending OS/container updates. Findings persist in SQLite
-  independent of email de-dup, queryable via `python -m app.report`. Source
-  and deployment notes: [`tars-updater-agent/README.md`](../tars-updater-agent/README.md).
+  scans running container images with Trivy daily, and posts a weekly
+  digest of pending OS/container updates to Discord via the Tars bot.
+  Findings persist in SQLite independent of post de-dup, queryable via
+  `python -m app.report`. Source and deployment notes:
+  [`tars-updater-agent/README.md`](../tars-updater-agent/README.md).

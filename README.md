@@ -29,12 +29,11 @@ All workloads run in the `apps` namespace unless noted.
 | [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) | [`apps/flaresolverr.yaml`](apps/flaresolverr.yaml) | `ghcr.io/flaresolverr/flaresolverr` | Cloudflare bypass proxy for Prowlarr indexers |
 | [ARM](https://github.com/automatic-ripping-machine/automatic-ripping-machine) | [`apps/arm.yaml`](apps/arm.yaml) | `automaticrippingmachine/automatic-ripping-machine` | Automatic disc ripping (needs host `/dev/sr0`, privileged) |
 | [Fetcharr](https://github.com/egg82/fetcharr) | [`apps/fetcharr.yaml`](apps/fetcharr.yaml) | `egg82/fetcharr` | Syncs quality profiles/tags across *arr apps |
-| [HortusFox](https://hortusfox.com/) | [`apps/hortusfox.yaml`](apps/hortusfox.yaml) | mariadb + app | Plant-care tracker, with cron sidecars ([`hortusfox-cron.yaml`](apps/hortusfox-cron.yaml) every 15 min, [`hortusfox-digest.yaml`](apps/hortusfox-digest.yaml) daily 7 AM email) |
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | [`apps/uptime-kuma.yaml`](apps/uptime-kuma.yaml) | `louislam/uptime-kuma` | Status/uptime monitoring for the cluster |
 | [Valheim](docs/valheim/README.md) | [`apps/valheim.yaml`](apps/valheim.yaml) | `ghcr.io/lloesche/valheim-server` | Dedicated game server, reachable over Tailscale (see linked doc for network diagram) |
-| [tars-updater-agent](tars-updater-agent/README.md) | [`apps/tars-updater-agent.yaml`](apps/tars-updater-agent.yaml) | `ghcr.io/ehulle117/tars-updater-agent` | Custom service: daily Trivy vuln scans (critical findings also queued for Claude triage — see "Claude-triaged alerts" below) + weekly OS/container update digest emailed via SMTP (digest only, not triaged) |
+| [tars-updater-agent](tars-updater-agent/README.md) | [`apps/tars-updater-agent.yaml`](apps/tars-updater-agent.yaml) | `ghcr.io/ehulle117/tars-updater-agent` | Custom service: daily Trivy vuln scans (critical findings also queued for Claude triage — see "Claude-triaged alerts" below) + weekly OS/container update digest posted to Discord via the `Tars` bot (digest only, not triaged) |
 | Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml), [`apps/case-worker-appdata-backup.yaml`](apps/case-worker-appdata-backup.yaml), [`apps/pi-appdata-backup.yaml`](apps/pi-appdata-backup.yaml) | `alpine` | CronJobs, daily (3:00/3:15/3:30 AM), copy each node's local-path appdata to Case; posts to Discord (`discord-alerts` secret) and queues for Claude triage if a run fails |
-| *arr queue check | [`apps/arr-queue-check.yaml`](apps/arr-queue-check.yaml) | `python:3.12-alpine` | CronJob, daily 8 AM, checks Radarr/Sonarr/Lidarr/Readarr queues for stuck imports (24h+) and Prowlarr for long-failing indexers; emails a report and queues for Claude triage only when something's actually wrong |
+| *arr queue check | [`apps/arr-queue-check.yaml`](apps/arr-queue-check.yaml) | `python:3.12-alpine` | CronJob, daily 8 AM, checks Radarr/Sonarr/Lidarr/Readarr queues for stuck imports (24h+) and Prowlarr for long-failing indexers; queues a report for Claude triage only when something's actually wrong |
 | Pod health check | [`apps/pod-health-check.yaml`](apps/pod-health-check.yaml) | `python:3.12-alpine` | CronJob, every 15 min, flags CrashLoopBackOff/ImagePullBackOff/OOMKilled/high-restart/stuck-Pending pods cluster-wide. Read-only via the `cluster-health-checker` ClusterRole. When it finds something, Claude Code triages it (checks for an existing open GitHub issue via `gh`, opens/comments/skips accordingly) and posts the resulting one-line decision to a Discord Forum channel — see "Claude-triaged alerts" below. |
 | Resource pressure check | [`apps/resource-pressure-check.yaml`](apps/resource-pressure-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, checks node CPU/memory (via metrics-server) and DiskPressure/MemoryPressure conditions, plus Case's NFS export disk usage above 90%. Same Claude-triage-on-finding behavior as Pod health check above. |
 | Claude Code dev pod | [`apps/claude-code.yaml`](apps/claude-code.yaml) | `node:22-bookworm-slim` + `@anthropic-ai/claude-code` | Persistent pod you `kubectl exec` into for interactive Claude Code sessions against this repo/cluster. Not a service — just `sleep infinity` with PVCs for `/workspace` and `~/.claude` so login survives restarts. |
@@ -55,7 +54,7 @@ appdata backup CronJob, media on Case is not managed by this repo.
    needs a hostname). Copy an existing single-container app (e.g.
    [`overseerr.yaml`](apps/overseerr.yaml)) as a starting point.
 2. Keep secrets out of the manifest — use a `Secret` referenced by name (see
-   `hortusfox-secrets` / `fetcharr-secrets` for the pattern) and create the
+   `fetcharr-secrets` for the pattern) and create the
    actual `Secret` object out-of-band, not committed.
 3. Add a row to the table above and commit to `main`. Argo CD picks it up
    automatically.
@@ -66,13 +65,18 @@ Cluster-health CronJobs (pod health, resource pressure, backup failures) and
 Argo CD's own `OutOfSync`/`Degraded` notifications all post to a single
 Discord channel via webhook.
 
-- **`discord-alerts` Secret** (`apps` namespace): created out-of-band like
-  `smtp-auth`, not committed. Keys: `webhook_url` (the three
+- **`discord-alerts` Secret** (`apps` namespace): created out-of-band, not
+  committed. Keys: `webhook_url` (the three
   `*-appdata-backup` CronJobs' direct failure alert), `recommendations_webhook_url`
   (the `tars-insight-digest` scheduled AI digest), and `bot_token` (the
   `Tars` Discord bot — Claude-triaged alerts, below; note this is a bot
   token, not a webhook URL, despite living in this same Secret for
   convenience).
+- **`DIGEST_CHANNEL_ID`** (plain env var, not a Secret — channel IDs aren't
+  sensitive): the text channel `tars-updater-agent`'s weekly OS/update
+  digest posts to via the bot. Currently `1547598576111194205`.
+- All alerting is now Discord-only — the `smtp-auth` Secret is no longer
+  referenced anywhere in this repo and can be deleted from the cluster.
 - **Argo CD notifications**: configured directly on the cluster in
   `argocd-notifications-cm` / `argocd-notifications-secret` (namespace
   `argocd`) — outside this repo's GitOps scope, since it configures Argo CD
@@ -123,11 +127,12 @@ running frequently (every 15 min). Two ways a finding gets to it:
    backups, to their own host's hostPath) or simply not built to run Claude
    themselves (`tars-updater-agent`'s own container image), so they can't
    co-locate with the Claude config PVC directly.
-   - Not everything that emails is routed here: `hortusfox-daily-digest`
-     (plant-care task reminders) and `tars-updater-agent`'s weekly OS/update
-     digest are routine informational summaries, not problem reports —
-     opening a GitHub issue over "water the ferns" or "a package has an
-     update available" doesn't make sense, so those stay plain email.
+   - Not everything routes here: `tars-updater-agent`'s weekly OS/update
+     digest is a routine informational summary, not a problem report —
+     opening a GitHub issue over "a package has an update available"
+     doesn't make sense, so it's posted as a plain message via the `Tars`
+     bot to a dedicated digest channel (`DIGEST_CHANNEL_ID`) instead of
+     going through triage.
    - Argo CD's and Uptime Kuma's native notifications are also excluded —
      both only know how to POST to a fixed webhook URL, with no hook for a
      custom script to redirect through.

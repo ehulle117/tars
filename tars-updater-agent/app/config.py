@@ -15,10 +15,6 @@ def load_config(path="agent-config.yaml"):
     with open(path, 'r') as f:
         config = yaml.safe_load(f)
         
-    # Inject env vars
-    if "smtp" in config:
-        config["smtp"]["password"] = os.environ.get("SMTP_PASSWORD", "")
-        
     return config
 
 config = load_config()

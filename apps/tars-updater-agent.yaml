@@ -7,13 +7,6 @@ metadata:
   namespace: apps
 data:
   agent-config.yaml: |
-    smtp:
-      host: "smtp.gmail.com"
-      port: 587
-      username: "ehulle117@gmail.com"
-      from_address: "ehulle117@gmail.com"
-      to_address: "ehulle117@gmail.com"
-      tls: true
     schedule:
       daily_scan_time: "02:00"
       weekly_digest_day: "sunday"
@@ -95,11 +88,13 @@ spec:
           image: ghcr.io/ehulle117/tars-updater-agent:main
           imagePullPolicy: Always
           env:
-            - name: SMTP_PASSWORD
+            - name: DISCORD_BOT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: smtp-auth
-                  key: password
+                  name: discord-alerts
+                  key: bot_token
+            - name: DIGEST_CHANNEL_ID
+              value: "1547598576111194205"
             - name: DB_PATH
               value: "/data/state.db"
           volumeMounts:

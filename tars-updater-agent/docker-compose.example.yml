@@ -11,5 +11,6 @@ services:
       - ./state.db:/app/state.db:rw                   # Persistent database for state
       # - /var/lib/dpkg:/var/lib/dpkg:ro              # Uncomment if you enable OS scanning for Debian/Ubuntu
     environment:
-      - SMTP_PASSWORD=your_secure_password_here
+      - DISCORD_BOT_TOKEN=your_bot_token_here
+      - DIGEST_CHANNEL_ID=your_channel_id_here
       - DB_PATH=/app/state.db
