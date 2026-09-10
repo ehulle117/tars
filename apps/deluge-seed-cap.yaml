@@ -78,7 +78,7 @@ spec:
                   name: deluge-rpc-auth
                   key: PASSWORD
             - name: SEED_CAP_DAYS
-              value: "30"
+              value: "7"
             volumeMounts:
             - name: script
               mountPath: /scripts
