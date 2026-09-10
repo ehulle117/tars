@@ -2,12 +2,20 @@ import json
 import logging
 import os
 import subprocess
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
 
-def post_to_channel(channel_id, content):
-    """Posts a plain message to a Discord text channel via the Tars bot.
+def post_digest_thread(channel_id, content):
+    """Posts the weekly digest as a new Forum thread via the Tars bot.
+
+    DIGEST_CHANNEL_ID is a Forum channel (same type as the other three bot
+    channels - TRACKED_ISSUES/ARR_QUEUE/UPDATER_AGENT), not a plain text
+    channel, so this creates a thread (POST /channels/{id}/threads) rather
+    than posting a bare message - Discord rejects a plain POST .../messages
+    against a Forum channel with 50008 "Cannot send messages in a
+    non-text channel".
 
     Shells out to curl rather than using requests/urllib directly - Discord's
     edge blocks Python's default TLS/HTTP fingerprint with a 403 (same issue
@@ -20,14 +28,17 @@ def post_to_channel(channel_id, content):
         logger.warning("DISCORD_BOT_TOKEN or channel id missing. Cannot post to Discord.")
         return
 
+    thread_name = f"Weekly Update Digest - {date.today().isoformat()}"
+    payload = {"name": thread_name[:100], "message": {"content": content}}
+
     try:
         result = subprocess.run(
             [
                 "curl", "-sS", "-f",
                 "-H", "Authorization: Bot " + bot_token,
                 "-H", "Content-Type: application/json",
-                "-d", json.dumps({"content": content}),
-                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                "-d", json.dumps(payload),
+                f"https://discord.com/api/v10/channels/{channel_id}/threads",
             ],
             check=True, timeout=15, capture_output=True, text=True,
         )

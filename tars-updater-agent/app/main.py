@@ -11,7 +11,7 @@ from app.storage.db import (
     has_cve_been_reported, mark_cve_reported,
     record_vulnerability_finding, record_update_finding,
 )
-from app.notifiers.discord import post_to_channel, format_weekly_digest
+from app.notifiers.discord import post_digest_thread, format_weekly_digest
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ def weekly_job():
     # going through the Claude-triage queue (see repo README's Alerting
     # section).
     digest = format_weekly_digest(os_updates, container_updates)
-    post_to_channel(os.environ.get("DIGEST_CHANNEL_ID"), digest)
+    post_digest_thread(os.environ.get("DIGEST_CHANNEL_ID"), digest)
     logger.info("Weekly digest posted to Discord.")
 
 def main():
