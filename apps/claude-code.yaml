@@ -57,7 +57,7 @@ spec:
         app: claude-code
     spec:
       nodeSelector:
-        kubernetes.io/hostname: k3s-worker-case
+        kubernetes.io/hostname: tars
       containers:
         - name: claude-code
           image: node:22-bookworm-slim

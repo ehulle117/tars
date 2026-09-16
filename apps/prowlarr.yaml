@@ -31,7 +31,7 @@ spec:
         app: prowlarr
     spec:
       nodeSelector:
-        kubernetes.io/hostname: k3s-worker-case
+        kubernetes.io/hostname: tars
       containers:
         - name: prowlarr
           image: lscr.io/linuxserver/prowlarr:latest
