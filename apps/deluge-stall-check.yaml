@@ -20,6 +20,13 @@ data:
     USERNAME = os.environ["DELUGE_USERNAME"]
     PASSWORD = os.environ["DELUGE_PASSWORD"]
     STALL_MINUTES = int(os.environ.get("STALL_MINUTES", "120"))
+    # A torrent stuck at 0 B/s this long has no seeds/peers coming - removing
+    # it (rather than just alerting forever) is what lets Sonarr/Radarr/
+    # Lidarr/Readarr notice the download vanished and search for another
+    # release instead of the item sitting dead in the queue indefinitely
+    # (tars#81: 12 torrents stalled anywhere from 8 to 49 days).
+    REMOVE_STALL_HOURS = int(os.environ.get("REMOVE_STALL_HOURS", "72"))
+    REMOVE_STALL_MINUTES = REMOVE_STALL_HOURS * 60
 
     client = DelugeRPCClient(HOST, PORT, USERNAME, PASSWORD)
     client.connect()
@@ -32,38 +39,54 @@ data:
 
     now = datetime.now(timezone.utc).timestamp()
     findings = []
+    removed = []
 
     for torrent_id, status in torrents.items():
         name = status.get(b"name", torrent_id).decode(errors="replace")
         state = status.get(b"state", b"").decode(errors="replace")
         added = status.get(b"time_added", now)
         age_min = (now - added) / 60
-
-        if state == "Error":
-            tracker = status.get(b"tracker_status", b"").decode(errors="replace")
-            findings.append(f"{name}: Error state ({tracker or 'no tracker message'})")
-        elif (
+        is_dead_stall = (
             state == "Downloading"
             and status.get(b"download_payload_rate", 0) == 0
             and status.get(b"progress", 0) < 100
             and age_min >= STALL_MINUTES
-        ):
+        )
+
+        if is_dead_stall and age_min >= REMOVE_STALL_MINUTES:
+            client.call("core.remove_torrent", torrent_id, True)
+            removed.append(f"{name}: removed after {age_min / 60:.0f}h stalled at {status.get(b'progress', 0):.0f}%")
+            continue
+
+        if state == "Error":
+            tracker = status.get(b"tracker_status", b"").decode(errors="replace")
+            findings.append(f"{name}: Error state ({tracker or 'no tracker message'})")
+        elif is_dead_stall:
             findings.append(f"{name}: stalled at {status.get(b'progress', 0):.0f}%, 0 B/s for {age_min:.0f}m+")
 
-    if not findings:
-        print("No stalled or errored torrents.")
-    else:
-        text_body = "\n".join(f"- {f}" for f in findings)
-        print(f"Found {len(findings)} stalled/errored torrent(s), queuing for Claude triage.")
+    if removed:
+        print(f"Removed {len(removed)} torrent(s) stalled {REMOVE_STALL_HOURS}h+:")
+        for line in removed:
+            print(f"  - {line}")
 
-        # Same triage-queue pattern as arr-queue-check: this job isn't
-        # co-located with the Claude config PVC, so pod-health-check drains
-        # and triages it - see "Claude-triaged alerts" in the repo README.
+    if not findings and not removed:
+        print("No stalled or errored torrents.")
+    elif not findings:
+        print("Nothing left to report - all findings were past the removal threshold.")
+    else:
+        lines = [f"- {f}" for f in findings]
+        if removed:
+            lines.append("")
+            lines.append(f"Also auto-removed {len(removed)} torrent(s) past the {REMOVE_STALL_HOURS}h removal threshold:")
+            lines += [f"- {r}" for r in removed]
+        text_body = "\n".join(lines)
+        print(f"Found {len(findings)} stalled/errored torrent(s), queuing for triage.")
+
         queue_dir = "/queue/.tars-triage-queue"
         os.makedirs(queue_dir, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        with open(f"{queue_dir}/arr-queue-check-{stamp}.txt", "w") as f:
-            f.write(f"[from deluge-stall-check]\n{text_body}")
+        with open(f"{queue_dir}/deluge-stall-check-{stamp}.txt", "w") as f:
+            f.write(text_body)
 ---
 apiVersion: batch/v1
 kind: CronJob
