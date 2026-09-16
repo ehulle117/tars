@@ -77,7 +77,9 @@ metadata:
   labels:
     app: valheim2
 spec:
-  replicas: 1
+  # Moving off k8s entirely to native Unraid Docker on case, 2026-09-16.
+  # See docs/valheim2/README.md and Homelab notes for where it lives now.
+  replicas: 0
   selector:
     matchLabels:
       app: valheim2
