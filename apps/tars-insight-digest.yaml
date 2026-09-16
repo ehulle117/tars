@@ -36,17 +36,20 @@ data:
     a Job that failed once but has since succeeded, informational events).
     Use judgment — don't just list everything you saw.
 
-    Your final response (and only your final response — no other commentary
-    before or after it) should be a short Discord message, plain text,
-    under 1800 characters:
+    If there is nothing worth flagging, your entire final response must be
+    exactly the single line `NO ISSUES` and nothing else — this is checked
+    literally, so no extra punctuation or commentary.
+
+    Otherwise, your final response (and only your final response — no other
+    commentary before or after it) should be a short Discord message, plain
+    text, under 1800 characters:
     - A one-line overall status
     - A bulleted list of real issues worth attention, each with a one-line
       recommendation
-    - Skip the noise section entirely if there's nothing worth mentioning —
-      do not pad the message with "everything else is fine" filler
 
-    Something outside this session takes your final response and posts it
-    to Discord — you do not need to (and cannot) post it yourself.
+    Something outside this session takes your final response and, unless it
+    is exactly `NO ISSUES`, posts it to Discord — you do not need to (and
+    cannot) post it yourself.
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -92,6 +95,11 @@ spec:
                   # matches that pattern) even for a value this benign, so posting
                   # to Discord happens here, in plain shell, outside its tool loop.
                   claude -p "$(cat /prompt/prompt.md)" --allowedTools "Bash(kubectl *)" > /tmp/digest.txt
+
+                  if [ "$(cat /tmp/digest.txt)" = "NO ISSUES" ]; then
+                    echo "Nothing to report, skipping Discord post."
+                    exit 0
+                  fi
 
                   # Posts via the Tars bot rather than an incoming webhook - the
                   # standalone webhook this used before was deleted out-of-band
