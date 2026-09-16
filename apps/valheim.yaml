@@ -73,9 +73,9 @@ metadata:
   labels:
     app: valheim
 spec:
-  # Scaled back up 2026-09-10 on k3s-worker-case after migrating its PVCs
-  # there (was spun down/moved while unused -- see git history).
-  replicas: 1
+  # Moving back to tars 2026-09-16 as part of retiring k3s-worker-case as a
+  # k8s node. Scaled to 0 while the PVCs migrate -- see git history.
+  replicas: 0
   selector:
     matchLabels:
       app: valheim
