@@ -34,6 +34,8 @@ All workloads run in the `apps` namespace unless noted.
 | [tars-updater-agent](tars-updater-agent/README.md) | [`apps/tars-updater-agent.yaml`](apps/tars-updater-agent.yaml) | `ghcr.io/ehulle117/tars-updater-agent` | Custom service: daily Trivy vuln scans (critical findings also queued for Claude triage — see "Claude-triaged alerts" below) + weekly OS/container update digest posted to Discord via the `Tars` bot (digest only, not triaged) |
 | Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml), [`apps/case-worker-appdata-backup.yaml`](apps/case-worker-appdata-backup.yaml), [`apps/pi-appdata-backup.yaml`](apps/pi-appdata-backup.yaml) | `alpine` | CronJobs, daily (3:00/3:15/3:30 AM), copy each node's local-path appdata to Case; posts to Discord (`discord-alerts` secret) and queues for Claude triage if a run fails |
 | *arr queue check | [`apps/arr-queue-check.yaml`](apps/arr-queue-check.yaml) | `python:3.12-alpine` | CronJob, daily 8 AM, checks Radarr/Sonarr/Lidarr/Readarr queues for stuck imports (24h+) and Prowlarr for long-failing indexers; queues a report for Claude triage only when something's actually wrong |
+| Deluge stall check | [`apps/deluge-stall-check.yaml`](apps/deluge-stall-check.yaml) | `python:3.12-alpine` | CronJob, every 2h, flags torrents in Deluge's `Error` state or stuck `Downloading` at 0 B/s for 2h+; queues for Claude triage same as *arr queue check |
+| Router check | [`apps/router-check.yaml`](apps/router-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, SSHes into the GL.iNet/OpenWrt router to check WAN is up and for upgradable `opkg` packages; queues for Claude triage. Needs a `router-ssh-key` Secret (public half authorized on the router) |
 | Pod health check | [`apps/pod-health-check.yaml`](apps/pod-health-check.yaml) | `python:3.12-alpine` | CronJob, every 15 min, flags CrashLoopBackOff/ImagePullBackOff/OOMKilled/high-restart/stuck-Pending pods cluster-wide. Read-only via the `cluster-health-checker` ClusterRole. When it finds something, Claude Code triages it (checks for an existing open GitHub issue via `gh`, opens/comments/skips accordingly) and posts the resulting one-line decision to a Discord Forum channel — see "Claude-triaged alerts" below. |
 | Resource pressure check | [`apps/resource-pressure-check.yaml`](apps/resource-pressure-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, checks node CPU/memory (via metrics-server) and DiskPressure/MemoryPressure conditions, plus Case's NFS export disk usage above 90%. Same Claude-triage-on-finding behavior as Pod health check above. |
 | Claude Code dev pod | [`apps/claude-code.yaml`](apps/claude-code.yaml) | `node:22-bookworm-slim` + `@anthropic-ai/claude-code` | Persistent pod you `kubectl exec` into for interactive Claude Code sessions against this repo/cluster. Not a service — just `sleep infinity` with PVCs for `/workspace` and `~/.claude` so login survives restarts. |
@@ -120,8 +122,9 @@ running frequently (every 15 min). Two ways a finding gets to it:
    `k3s-worker-case` alongside the `claude-code-config-pvc` and triage their
    own findings in the same run they detect them in.
 2. **Queued** (everything else that used to only send an email or a raw
-   Discord ping): `arr-queue-check` and the three `*-appdata-backup`
-   CronJobs, plus `tars-updater-agent`'s critical-CVE alert, drop a small
+   Discord ping): `arr-queue-check`, `deluge-stall-check`, and the three
+   `*-appdata-backup` CronJobs, plus `tars-updater-agent`'s critical-CVE
+   alert, drop a small
    text file in `.tars-triage-queue/` on the shared `nfs-media-pvc` (already
    mounted in most of them for other reasons) whenever they'd otherwise have
    emailed/alerted. `pod-health-check` drains that directory every run,

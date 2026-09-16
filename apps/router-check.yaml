@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: router-check-script
+  namespace: apps
+data:
+  check.py: |
+    import json
+    import os
+    import subprocess
+    from datetime import datetime
+
+    ROUTER_HOST = os.environ["ROUTER_HOST"]
+    SSH_KEY_PATH = "/ssh/id_ed25519"
+
+    SSH_BASE = [
+        "ssh", "-i", SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
+        "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+        f"root@{ROUTER_HOST}",
+    ]
+
+
+    def ssh_run(remote_cmd, timeout=15):
+        return subprocess.run(SSH_BASE + [remote_cmd], capture_output=True, text=True, timeout=timeout)
+
+
+    findings = []
+
+    wan = ssh_run("ubus call network.interface.wan status")
+    if wan.returncode != 0:
+        # Covers both "router unreachable" and "ubus/wan iface renamed" -
+        # either way it's worth a look, and there's nothing more specific
+        # to say without a successful connection.
+        findings.append(f"couldn't reach router or query WAN status: {(wan.stderr or wan.stdout).strip()[:200]}")
+    else:
+        try:
+            status = json.loads(wan.stdout)
+            if not status.get("up"):
+                findings.append("WAN interface is down")
+        except json.JSONDecodeError:
+            findings.append(f"unexpected ubus output: {wan.stdout.strip()[:200]}")
+
+    if not findings:
+        # Only checked when the router's reachable and WAN is up - an
+        # unreachable router already produced a finding above, no need to
+        # double-report it as also missing an update check.
+        upgradable = ssh_run("opkg list-upgradable")
+        if upgradable.returncode == 0 and upgradable.stdout.strip():
+            pkgs = upgradable.stdout.strip().splitlines()
+            findings.append(f"{len(pkgs)} OpenWrt package(s) upgradable: " + ", ".join(p.split()[0] for p in pkgs[:10]))
+
+    if not findings:
+        print("Router reachable, WAN up, no pending package updates.")
+    else:
+        text_body = "\n".join(f"- {f}" for f in findings)
+        print(f"Found {len(findings)} router issue(s), queuing for Claude triage.")
+
+        # Same triage-queue pattern as arr-queue-check/deluge-stall-check:
+        # this job isn't co-located with the Claude config PVC, so
+        # pod-health-check drains and triages it.
+        queue_dir = "/queue/.tars-triage-queue"
+        os.makedirs(queue_dir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        with open(f"{queue_dir}/router-check-{stamp}.txt", "w") as f:
+            f.write(text_body)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: router-check
+  namespace: apps
+spec:
+  schedule: "*/30 * * * *" # every 30 min
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: router-check
+            image: python:3.12-alpine
+            command: ["sh", "-c", "apk add --no-cache openssh-client >/dev/null && python /scripts/check.py"]
+            env:
+            - name: ROUTER_HOST
+              value: "192.168.8.1"
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: ssh-key
+              mountPath: /ssh
+              readOnly: true
+            - name: triage-queue
+              mountPath: /queue
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: router-check-script
+          - name: ssh-key
+            secret:
+              secretName: router-ssh-key
+              defaultMode: 0400
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc

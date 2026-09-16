@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deluge-stall-check-script
+  namespace: apps
+data:
+  check.py: |
+    import os
+    import sys
+    from datetime import datetime, timezone
+
+    try:
+        from deluge_client import DelugeRPCClient
+    except ImportError:
+        os.system(f"{sys.executable} -m pip install --quiet deluge-client")
+        from deluge_client import DelugeRPCClient
+
+    HOST = os.environ.get("DELUGE_HOST", "deluge-svc.apps.svc.cluster.local")
+    PORT = int(os.environ.get("DELUGE_PORT", "58846"))
+    USERNAME = os.environ["DELUGE_USERNAME"]
+    PASSWORD = os.environ["DELUGE_PASSWORD"]
+    STALL_MINUTES = int(os.environ.get("STALL_MINUTES", "120"))
+
+    client = DelugeRPCClient(HOST, PORT, USERNAME, PASSWORD)
+    client.connect()
+
+    torrents = client.call(
+        "core.get_torrents_status",
+        {},
+        [b"name", b"state", b"download_payload_rate", b"progress", b"time_added", b"tracker_status"],
+    )
+
+    now = datetime.now(timezone.utc).timestamp()
+    findings = []
+
+    for torrent_id, status in torrents.items():
+        name = status.get(b"name", torrent_id).decode(errors="replace")
+        state = status.get(b"state", b"").decode(errors="replace")
+        added = status.get(b"time_added", now)
+        age_min = (now - added) / 60
+
+        if state == "Error":
+            tracker = status.get(b"tracker_status", b"").decode(errors="replace")
+            findings.append(f"{name}: Error state ({tracker or 'no tracker message'})")
+        elif (
+            state == "Downloading"
+            and status.get(b"download_payload_rate", 0) == 0
+            and status.get(b"progress", 0) < 100
+            and age_min >= STALL_MINUTES
+        ):
+            findings.append(f"{name}: stalled at {status.get(b'progress', 0):.0f}%, 0 B/s for {age_min:.0f}m+")
+
+    if not findings:
+        print("No stalled or errored torrents.")
+    else:
+        text_body = "\n".join(f"- {f}" for f in findings)
+        print(f"Found {len(findings)} stalled/errored torrent(s), queuing for Claude triage.")
+
+        # Same triage-queue pattern as arr-queue-check: this job isn't
+        # co-located with the Claude config PVC, so pod-health-check drains
+        # and triages it - see "Claude-triaged alerts" in the repo README.
+        queue_dir = "/queue/.tars-triage-queue"
+        os.makedirs(queue_dir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        with open(f"{queue_dir}/arr-queue-check-{stamp}.txt", "w") as f:
+            f.write(f"[from deluge-stall-check]\n{text_body}")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: deluge-stall-check
+  namespace: apps
+spec:
+  schedule: "0 */2 * * *" # every 2 hours
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: deluge-stall-check
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py"]
+            env:
+            - name: DELUGE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: deluge-rpc-auth
+                  key: USERNAME
+            - name: DELUGE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: deluge-rpc-auth
+                  key: PASSWORD
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: triage-queue
+              mountPath: /queue
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: deluge-stall-check-script
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc
