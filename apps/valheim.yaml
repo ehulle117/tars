@@ -73,9 +73,8 @@ metadata:
   labels:
     app: valheim
 spec:
-  # Moving back to tars 2026-09-16 as part of retiring k3s-worker-case as a
-  # k8s node. Scaled to 0 while the PVCs migrate -- see git history.
-  replicas: 0
+  # Back on tars 2026-09-16, part of retiring k3s-worker-case.
+  replicas: 1
   selector:
     matchLabels:
       app: valheim
