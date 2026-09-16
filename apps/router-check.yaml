@@ -11,7 +11,7 @@ data:
     import sys
     from datetime import datetime
 
-    sys.path.insert(0, "/lib")
+    sys.path.insert(0, "/alert-lib")
     from alert_lib import post_digest
 
     ROUTER_HOST = os.environ["ROUTER_HOST"]
@@ -99,7 +99,7 @@ spec:
             - name: script
               mountPath: /scripts
             - name: lib
-              mountPath: /lib
+              mountPath: /alert-lib
             - name: ssh-key
               mountPath: /ssh
               readOnly: true
