@@ -1,0 +1,85 @@
+# Argo CD's own notifications only know how to POST to a fixed webhook URL
+# - no way to route a bot token through them - so instead of relying on that
+# native integration, this reads the same Application status Argo CD itself
+# uses, straight off the K8s API (read-only, same pattern as
+# pod-health-check), and queues findings like every other detector.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argo-sync-check-script
+  namespace: apps
+data:
+  check.py: |
+    import json
+    import os
+    import ssl
+    import urllib.request
+    from datetime import datetime
+
+    TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    with open(TOKEN_PATH) as f:
+        TOKEN = f.read().strip()
+
+    API = "https://kubernetes.default.svc"
+    ctx = ssl.create_default_context(cafile=CA_PATH)
+
+
+    def api_get(path):
+        req = urllib.request.Request(f"{API}{path}", headers={"Authorization": f"Bearer {TOKEN}"})
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+            return json.loads(resp.read().decode())
+
+
+    apps = api_get("/apis/argoproj.io/v1alpha1/namespaces/argocd/applications")["items"]
+    issues = []
+
+    for app in apps:
+        name = app["metadata"]["name"]
+        sync = app.get("status", {}).get("sync", {}).get("status", "Unknown")
+        health = app.get("status", {}).get("health", {}).get("status", "Unknown")
+        if sync not in ("Synced",) or health not in ("Healthy",):
+            issues.append(f"`{name}`: sync={sync}, health={health}")
+
+    if not issues:
+        print("All Argo CD apps synced and healthy.")
+    else:
+        text_body = "\n".join(f"- {i}" for i in issues)
+        print(f"Found {len(issues)} out-of-sync/unhealthy app(s), queuing for triage.")
+        queue_dir = "/queue/.tars-triage-queue"
+        os.makedirs(queue_dir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        with open(f"{queue_dir}/argo-sync-check-{stamp}.txt", "w") as f:
+            f.write(text_body)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: argo-sync-check
+  namespace: apps
+spec:
+  schedule: "*/15 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: cluster-health-checker
+          restartPolicy: OnFailure
+          containers:
+          - name: argo-sync-check
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py"]
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: triage-queue
+              mountPath: /queue
+          volumes:
+          - name: script
+            configMap:
+              name: argo-sync-check-script
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc

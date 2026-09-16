@@ -5,14 +5,15 @@ metadata:
   namespace: apps
 data:
   check.py: |
+    # Detector only - see pod-health-check.yaml for why: no Claude/gh here,
+    # tars-alert-triage does all triaging from the shared queue.
     import json
     import os
-    import re
     import shutil
     import ssl
     import subprocess
-    import time
     import urllib.request
+    from datetime import datetime
 
     TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
     CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
@@ -20,86 +21,6 @@ data:
         TOKEN = f.read().strip()
 
     API = "https://kubernetes.default.svc"
-    BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
-
-
-    def run_with_retries(cmd, attempts=3, delay_seconds=10, **kwargs):
-        """Retries a subprocess call a few times before giving up. Added
-        after tars#48: the bootstrap step below hits several external
-        services (apk mirror, npm registry, GitHub releases) from a fresh
-        container every run, and a single flaky one was causing full pod
-        restarts (each restarting the whole container from scratch) instead
-        of a quick in-process retry."""
-        last_error = None
-        for attempt in range(1, attempts + 1):
-            try:
-                return subprocess.run(cmd, check=True, **kwargs)
-            except subprocess.CalledProcessError as e:
-                last_error = e
-                if attempt < attempts:
-                    print(f"Attempt {attempt}/{attempts} failed ({e}), retrying in {delay_seconds}s...")
-                    time.sleep(delay_seconds)
-        raise last_error
-
-
-    def discord_post(path, payload):
-        # Discord's edge blocks Python urllib's TLS/HTTP fingerprint with a
-        # 403; shelling out to busybox wget (present in python:3.12-alpine)
-        # avoids it.
-        result = subprocess.run(
-            ["wget", "-q", "-O-", "--header=Authorization: Bot " + BOT_TOKEN,
-             "--header=Content-Type: application/json",
-             "--post-data", json.dumps(payload),
-             f"https://discord.com/api/v10{path}"],
-            check=True, timeout=15, capture_output=True, text=True,
-        )
-        return json.loads(result.stdout)
-
-
-    def post_and_track(channel_id, source_label, message, repo):
-        """Posts a triage decision to Discord (new Forum post, or a reply in
-        an existing issue's original thread for a recurring finding), and
-        stashes the thread+message id on a newly-opened issue so
-        issue-closed-notify.yml can find it again later."""
-        commented = re.search(rf"Commented on {re.escape(repo)}#(\d+)", message)
-        existing_thread_id = None
-        if commented:
-            try:
-                existing_body = subprocess.run(
-                    ["gh", "issue", "view", commented.group(1), "--repo", repo, "--json", "body", "-q", ".body"],
-                    capture_output=True, text=True, timeout=30, check=True,
-                ).stdout
-                found = re.search(r"discord_thread_id: (\d+)", existing_body)
-                if found:
-                    existing_thread_id = found.group(1)
-            except Exception as e:
-                print(f"Couldn't look up existing issue's thread (falling back to a new post): {e}")
-
-        if existing_thread_id:
-            posted = discord_post(f"/channels/{existing_thread_id}/messages", {"content": message})
-            thread_id, message_id = existing_thread_id, posted["id"]
-        else:
-            thread_name = f"{source_label}: {message[:80]}"
-            posted = discord_post(f"/channels/{channel_id}/threads",
-                                   {"name": thread_name, "message": {"content": message}})
-            thread_id, message_id = posted["id"], posted["message"]["id"]
-
-        opened = re.search(rf"Opened {re.escape(repo)}#(\d+)", message)
-        if opened:
-            try:
-                issue_num = opened.group(1)
-                current_body = subprocess.run(
-                    ["gh", "issue", "view", issue_num, "--repo", repo, "--json", "body", "-q", ".body"],
-                    capture_output=True, text=True, timeout=30, check=True,
-                ).stdout
-                subprocess.run(
-                    ["gh", "issue", "edit", issue_num, "--repo", repo, "--body",
-                     f"{current_body}\n\n<!-- discord_thread_id: {thread_id} discord_message_id: {message_id} -->"],
-                    check=True, timeout=30,
-                )
-            except Exception as e:
-                print(f"Couldn't stash Discord thread id on the new issue (non-fatal): {e}")
-
     CPU_PCT_THRESHOLD = 90
     MEM_PCT_THRESHOLD = 90
     CASE_DISK_PCT_THRESHOLD = 90
@@ -172,58 +93,15 @@ data:
         issues.append(f"couldn't check Case disk usage: {e}")
 
     if not issues:
-        print("No resource pressure detected. Skipping Discord notification.")
+        print("No resource pressure detected.")
     else:
-        raw_findings = "\n".join(f"- {i}" for i in issues)
-
-        # Bootstrap Claude Code + gh CLI only when there's actually something
-        # to triage - the common "no pressure" case above never pays this
-        # cost. Retried as a whole (see run_with_retries/tars#48): a
-        # transient failure partway through (a flaky mirror, a GitHub API
-        # hiccup) is cheap to just redo entirely, rather than relying on the
-        # pod restarting from scratch.
-        run_with_retries(["sh", "-c",
-            "apk add --no-cache nodejs npm bash curl tar && "
-            "npm install -g @anthropic-ai/claude-code && "
-            "GH_VERSION=$(curl -s https://api.github.com/repos/cli/cli/releases/latest | "
-            "  grep tag_name | cut -d'\"' -f4 | tr -d v) && "
-            "curl -L -o /tmp/gh.tar.gz https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz && "
-            "tar -xzf /tmp/gh.tar.gz -C /tmp && "
-            "install -m 0755 /tmp/gh_${GH_VERSION}_linux_amd64/bin/gh /usr/local/bin/gh && "
-            # Same fix as the claude-code dev pod (apps/claude-code.yaml): auth
-            # config lives at ~/.claude.json, outside the mounted ~/.claude/
-            # dir, so it's symlinked to the copy the dev pod already persisted.
-            "[ -e /root/.claude.json ] && [ ! -L /root/.claude.json ] && mv /root/.claude.json /root/.claude/claude.json; "
-            "ln -sf /root/.claude/claude.json /root/.claude.json"
-        ], timeout=180)
-
-        repo = os.environ["GITHUB_REPO"]
-        prompt = (
-            "You are triaging a finding from the tars cluster's resource-pressure-check "
-            "(runs every 30 minutes; this only fires when it finds something):\n\n"
-            f"{raw_findings}\n\n"
-            f'Use `gh issue list --repo {repo} --state open --search "<keywords>"` '
-            "to check whether an open issue already tracks this. Then:\n"
-            "- If it's a genuine, actionable problem with NO existing matching issue: open one with "
-            f'`gh issue create --repo {repo} --title "..." --body "..."`.\n'
-            "- If it's a genuine problem that already HAS a matching open issue: add a short comment "
-            f'with `gh issue comment <number> --repo {repo} --body "..."` noting '
-            "it's still occurring, rather than opening a duplicate.\n"
-            "- If it's not actually worth tracking (transient, already resolving, etc.): do nothing on GitHub.\n\n"
-            "Your FINAL response must be exactly one short line of Discord-ready plain text summarizing "
-            f'what you did (e.g. "Opened {repo}#12: ..." or "Commented on '
-            f'{repo}#12 (still occurring)" or "Not tracked - looks transient: ...").\n'
-            "No other commentary before or after it."
-        )
-
-        result = subprocess.run(
-            ["claude", "-p", prompt, "--allowedTools", "Bash(gh *)"],
-            capture_output=True, text=True, timeout=180, check=True,
-        )
-        message = result.stdout.strip() or raw_findings
-
-        post_and_track(os.environ["TRACKED_ISSUES_CHANNEL_ID"], "resource-pressure-check", message, repo)
-        print(f"Posted {len(issues)} issue(s), triaged: {message}")
+        text_body = "\n".join(f"- {i}" for i in issues)
+        print(f"Found {len(issues)} resource issue(s), queuing for triage.")
+        queue_dir = "/queue/.tars-triage-queue"
+        os.makedirs(queue_dir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        with open(f"{queue_dir}/resource-pressure-check-{stamp}.txt", "w") as f:
+            f.write(text_body)
 
     # Heartbeat to Uptime Kuma so a crashed/never-ran job (which wouldn't reach
     # this line) shows as down, instead of failing silently.
@@ -244,32 +122,11 @@ spec:
         spec:
           serviceAccountName: cluster-health-checker
           restartPolicy: OnFailure
-          # Co-located with the claude-code dev pod's config PVC (below) so
-          # triage can reuse its existing Claude Code login - no separate
-          # Anthropic API key/billing.
-          nodeSelector:
-            kubernetes.io/hostname: tars
           containers:
           - name: resource-pressure-check
             image: python:3.12-alpine
             command: ["python", "/scripts/check.py"]
             env:
-            - name: DISCORD_BOT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: discord-alerts
-                  key: bot_token
-            - name: TRACKED_ISSUES_CHANNEL_ID
-              value: "1546905058099331202"
-            - name: GH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: github-pat
-                  key: token
-            - name: GITHUB_REPO
-              value: "ehulle117/tars"
-            - name: HOME
-              value: "/root"
             - name: KUMA_PUSH_URL
               valueFrom:
                 secretKeyRef:
@@ -281,8 +138,8 @@ spec:
             - name: case-data
               mountPath: /mnt/case-data
               readOnly: true
-            - name: claude-config
-              mountPath: /root/.claude
+            - name: triage-queue
+              mountPath: /queue
           volumes:
           - name: script
             configMap:
@@ -290,6 +147,6 @@ spec:
           - name: case-data
             persistentVolumeClaim:
               claimName: nfs-media-pvc
-          - name: claude-config
+          - name: triage-queue
             persistentVolumeClaim:
-              claimName: claude-code-config-pvc
+              claimName: nfs-media-pvc

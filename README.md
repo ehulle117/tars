@@ -32,14 +32,16 @@ All workloads run in the `apps` namespace unless noted.
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | [`apps/uptime-kuma.yaml`](apps/uptime-kuma.yaml) | `louislam/uptime-kuma` | Status/uptime monitoring for the cluster |
 | [Valheim](docs/valheim/README.md) | [`apps/valheim.yaml`](apps/valheim.yaml) | `ghcr.io/lloesche/valheim-server` | Dedicated game server, reachable over Tailscale (see linked doc for network diagram) |
 | [tars-updater-agent](tars-updater-agent/README.md) | [`apps/tars-updater-agent.yaml`](apps/tars-updater-agent.yaml) | `ghcr.io/ehulle117/tars-updater-agent` | Custom service: daily Trivy vuln scans (critical findings also queued for Claude triage — see "Claude-triaged alerts" below) + weekly OS/container update digest posted to Discord via the `Tars` bot (digest only, not triaged) |
-| Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml), [`apps/case-worker-appdata-backup.yaml`](apps/case-worker-appdata-backup.yaml), [`apps/pi-appdata-backup.yaml`](apps/pi-appdata-backup.yaml) | `alpine` | CronJobs, daily (3:00/3:15/3:30 AM), copy each node's local-path appdata to Case; posts to Discord (`discord-alerts` secret) and queues for Claude triage if a run fails |
-| *arr queue check | [`apps/arr-queue-check.yaml`](apps/arr-queue-check.yaml) | `python:3.12-alpine` | CronJob, daily 8 AM, checks Radarr/Sonarr/Lidarr/Readarr queues for stuck imports (24h+) and Prowlarr for long-failing indexers; queues a report for Claude triage only when something's actually wrong |
-| Deluge stall check | [`apps/deluge-stall-check.yaml`](apps/deluge-stall-check.yaml) | `python:3.12-alpine` | CronJob, every 2h, flags torrents in Deluge's `Error` state or stuck `Downloading` at 0 B/s for 2h+; queues for Claude triage same as *arr queue check |
-| Router check | [`apps/router-check.yaml`](apps/router-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, SSHes into the GL.iNet/OpenWrt router to check WAN is up and for upgradable `opkg` packages; queues for Claude triage. Needs a `router-ssh-key` Secret (public half authorized on the router) |
-| Pod health check | [`apps/pod-health-check.yaml`](apps/pod-health-check.yaml) | `python:3.12-alpine` | CronJob, every 15 min, flags CrashLoopBackOff/ImagePullBackOff/OOMKilled/high-restart/stuck-Pending pods cluster-wide. Read-only via the `cluster-health-checker` ClusterRole. When it finds something, Claude Code triages it (checks for an existing open GitHub issue via `gh`, opens/comments/skips accordingly) and posts the resulting one-line decision to a Discord Forum channel — see "Claude-triaged alerts" below. |
-| Resource pressure check | [`apps/resource-pressure-check.yaml`](apps/resource-pressure-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, checks node CPU/memory (via metrics-server) and DiskPressure/MemoryPressure conditions, plus Case's NFS export disk usage above 90%. Same Claude-triage-on-finding behavior as Pod health check above. |
+| Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml), [`apps/case-worker-appdata-backup.yaml`](apps/case-worker-appdata-backup.yaml), [`apps/pi-appdata-backup.yaml`](apps/pi-appdata-backup.yaml) | `alpine` | CronJobs, daily (3:00/3:15/3:30 AM), copy each node's local-path appdata to Case; queues for triage if a run fails — see "Alerting" below |
+| *arr queue check | [`apps/arr-queue-check.yaml`](apps/arr-queue-check.yaml) | `python:3.12-alpine` | CronJob, daily 8 AM, checks Radarr/Sonarr/Lidarr/Readarr queues for stuck imports (24h+) and Prowlarr for long-failing indexers; queues a report only when something's actually wrong |
+| Deluge stall check | [`apps/deluge-stall-check.yaml`](apps/deluge-stall-check.yaml) | `python:3.12-alpine` | CronJob, every 2h, flags torrents in Deluge's `Error` state or stuck `Downloading` at 0 B/s for 2h+ |
+| Router check | [`apps/router-check.yaml`](apps/router-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, SSHes into the GL.iNet/OpenWrt router: WAN-down is an alert, upgradable `opkg` packages post straight to the digest channel. Needs a `router-ssh-key` Secret (public half authorized on the router) |
+| Case health check | [`apps/case-health-check.yaml`](apps/case-health-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, SSHes into Case (Unraid) to check array state (`mdcmd status`) and `/mnt/user` disk usage. Needs a `case-ssh-key` Secret |
+| Argo sync check | [`apps/argo-sync-check.yaml`](apps/argo-sync-check.yaml) | `python:3.12-alpine` | CronJob, every 15 min, reads `Application` status straight off the K8s API and flags anything not `Synced`/`Healthy` — replaces Argo CD's native webhook notifier so this also routes through the bot |
+| Pod health check | [`apps/pod-health-check.yaml`](apps/pod-health-check.yaml) | `python:3.12-alpine` | CronJob, every 15 min, flags CrashLoopBackOff/ImagePullBackOff/OOMKilled/high-restart/stuck-Pending pods cluster-wide. Read-only via the `cluster-health-checker` ClusterRole. Detector only — queues, doesn't triage |
+| Resource pressure check | [`apps/resource-pressure-check.yaml`](apps/resource-pressure-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, checks node CPU/memory (via metrics-server) and DiskPressure/MemoryPressure conditions, plus Case's NFS export disk usage above 90%. Detector only — queues, doesn't triage |
+| Alert triage | [`apps/tars-alert-triage.yaml`](apps/tars-alert-triage.yaml) | `python:3.12-alpine` | CronJob, every 15 min — the only place Claude/`gh`/Discord triage happens. Drains every detector's queued findings, dedupes against open GitHub issues, opens/comments/skips, posts to Discord. See "Alerting" below |
 | Claude Code dev pod | [`apps/claude-code.yaml`](apps/claude-code.yaml) | `node:22-bookworm-slim` + `@anthropic-ai/claude-code` | Persistent pod you `kubectl exec` into for interactive Claude Code sessions against this repo/cluster. Not a service — just `sleep infinity` with PVCs for `/workspace` and `~/.claude` so login survives restarts. |
-| Insight digest | [`apps/tars-insight-digest.yaml`](apps/tars-insight-digest.yaml) | same image as the dev pod above | CronJob, every 6h, has Claude Code itself (no separate Anthropic API billing — reuses the dev pod's login via the shared `claude-code-config-pvc`) read cluster state and judge real issues vs. noise, posting a curated digest to a dedicated Discord channel. Read-only via the `tars-insight-vm` ServiceAccount (created out-of-band, not in this repo) — Claude never sees the bot token or posts to Discord itself; a plain shell step outside its tool loop does that, since Claude Code's own Bash-tool safety check refuses to expand env vars that look like secrets. |
 
 ## Storage
 
@@ -63,123 +65,111 @@ appdata backup CronJob, media on Case is not managed by this repo.
 
 ## Alerting
 
-Cluster-health CronJobs (pod health, resource pressure, backup failures) and
-Argo CD's own `OutOfSync`/`Degraded` notifications all post to a single
-Discord channel via webhook.
+Everything alerting-related is bot-only — no Discord webhooks anywhere in
+this repo — and follows one shape: a small set of **detectors** (one per
+resource: pods, node/Case resource pressure, *arr queues, Deluge, the
+router, Case's array, Argo CD sync status, the three appdata backups,
+`tars-updater-agent`'s CVE scan) each just look for a problem and, if they
+find one, drop a text file in a shared queue. One job, **`tars-alert-triage`**
+([`apps/tars-alert-triage.yaml`](apps/tars-alert-triage.yaml)), is the only
+thing that ever touches Claude, `gh`, or Discord for a problem report — no
+detector triages its own findings, holds a GitHub token, or knows a channel
+ID. Two channels total:
 
-- **`discord-alerts` Secret** (`apps` namespace): created out-of-band, not
-  committed. Keys: `webhook_url` (the three
-  `*-appdata-backup` CronJobs' direct failure alert) and `bot_token` (the
-  `Tars` Discord bot — used for everything else below, including
-  `tars-insight-digest`'s recommendations, which used to post via a
-  separate `recommendations_webhook_url` webhook until that webhook was
-  deleted server-side; see issue #63).
-- **Bot-posted digest channels** (plain env vars, not Secrets — channel IDs
-  aren't sensitive), each a dedicated Forum channel so the two feeds don't
-  mix:
-  - `DIGEST_CHANNEL_ID` (`1547598576111194205`, "k8s-updates"):
-    `tars-updater-agent`'s weekly OS/container update digest.
-  - `RECOMMENDATIONS_CHANNEL_ID` (`1547614601506463906`,
-    "insight-recommendations"): `tars-insight-digest`'s scheduled AI digest.
-- All alerting is now Discord-only — the `smtp-auth` Secret is no longer
-  referenced anywhere in this repo and can be deleted from the cluster.
-- **Argo CD notifications**: configured directly on the cluster in
-  `argocd-notifications-cm` / `argocd-notifications-secret` (namespace
-  `argocd`) — outside this repo's GitOps scope, since it configures Argo CD
-  itself rather than an app it manages. The webhook service is registered
-  under key `service.webhook.discord`; `selfHeal: true` is set on both the
-  `tars-apps` and `tars-storage` Applications so manual drift (like a
-  live-patched container that isn't in git) gets reverted automatically
-  instead of silently persisting.
-- **`uptime-kuma-push` Secret** (`apps` namespace): one push-monitor URL per
-  key (`pod_health_check_url`, `resource_pressure_check_url`,
+- **Alerts channel** (`ALERTS_CHANNEL_ID`, Forum) — every triaged problem
+  from every detector, one thread per tracked issue, thread title
+  `<source>: <summary>`.
+- **Digest channel** (`DIGEST_CHANNEL_ID`, `1547598576111194205`, plain
+  channel) — routine "you should know this" info that isn't a problem:
+  `tars-updater-agent`'s weekly OS/container update summary, and
+  `router-check`'s list of upgradable `opkg` packages. Posted directly, no
+  GitHub issue, no triage, no resolution tracking.
+
+### Detectors
+
+Every detector is symmetric: find a problem or don't, and if so, write
+`<queue-mount>/.tars-triage-queue/<source>-<timestamp>.txt` on the shared
+`nfs-media-pvc`. None of them know about Discord, GitHub, or Claude.
+
+- `pod-health-check` (15 min): CrashLoopBackOff/ImagePullBackOff/OOMKilled/
+  high-restart/stuck-Pending pods cluster-wide, via the read-only
+  `cluster-health-checker` ClusterRole.
+- `resource-pressure-check` (30 min): node CPU/memory (metrics-server),
+  DiskPressure/MemoryPressure conditions, and Case's NFS export usage.
+- `arr-queue-check` (daily 8 AM): stuck *arr imports, long-failing
+  Prowlarr indexers.
+- `deluge-stall-check` (2h): torrents in `Error` state or stalled at 0 B/s.
+- `router-check` (30 min): WAN down, via SSH + `ubus` on the GL.iNet router
+  (`router-ssh-key` Secret).
+- `case-health-check` (30 min): Unraid array state (`mdcmd status`) and
+  `/mnt/user` disk usage, via SSH (`case-ssh-key` Secret).
+- `argo-sync-check` (15 min): any Argo CD `Application` not `Synced`/
+  `Healthy`, read straight off the K8s API — this is what replaces Argo
+  CD's own native webhook notifier, so Argo status also flows through the
+  bot instead of a separate integration.
+- The three `*-appdata-backup` CronJobs: queue on backup failure.
+- `tars-updater-agent`: queues on a `CRITICAL`-severity Trivy finding
+  (its weekly update summary is a digest-channel post instead — see above).
+
+Argo CD's and Uptime Kuma's *own* native notification configs (which only
+know how to POST to a fixed webhook URL) are unused/removed in favor of the
+detectors above — one shape, no separate webhook-based path to keep in sync.
+
+### `tars-alert-triage`
+
+Runs every 15 min, node-pinned to `tars` (needs `claude-code-config-pvc`
+mounted read-write — the same PVC the `claude-code` dev pod uses, so its
+login is what authenticates Claude here, no separate Anthropic API key).
+Each run:
+
+1. Bootstraps Claude Code + `gh` only if the queue isn't empty.
+2. For each queued file: runs a Claude triage prompt (shared as
+   `triage_prompt`/`run_triage` in [`apps/alert-lib.yaml`](apps/alert-lib.yaml)) —
+   checks `gh issue list --repo ehulle117/tars --state open` for an existing
+   issue, then opens one, comments on the existing one, or does nothing on
+   GitHub if it's not actually worth tracking.
+3. Posts the result to `ALERTS_CHANNEL_ID` via the `Tars` bot
+   (`post_and_track` in `alert-lib.yaml`) as a new Forum thread — or, for a
+   recurring finding, a reply into the *same* thread as before (looked up
+   via a `discord_thread_id` marker stashed in the issue body).
+4. Deletes the queue file only after a successful post — a failed run
+   leaves it for the next attempt.
+
+`alert-lib.yaml`'s `discord_post`/`post_and_track`/`triage_prompt`/
+`run_triage` are the one place this logic is written — every script that
+touches Discord mounts this ConfigMap instead of carrying its own copy.
+
+Needs: `claude-code-config-pvc`, `github-pat` Secret (`GH_TOKEN`),
+`GITHUB_REPO` env var, `discord-alerts` Secret (`bot_token`),
+`ALERTS_CHANNEL_ID` env var, and `nfs-media-pvc` mounted for the queue.
+
+**Note on testing changes here**: because `selfHeal: true` is set on the
+`tars-apps`/`tars-storage` Argo CD Applications, a live `kubectl apply`
+against anything Argo CD manages gets silently reverted back to match
+`main` within moments (not instantly — a live test can appear to pass by
+winning a race against that reconcile cycle, then fail once merged if the
+actual committed content is broken) — validate with `--dry-run=client`, but
+treat a live-tested-before-merge result as provisional and re-verify after
+the real merge lands.
+
+### Secrets
+
+- **`discord-alerts`** (`apps` namespace, out-of-band): `bot_token` only —
+  the `Tars` Discord bot, invited to the server once with Send Messages/
+  Create Posts in Forums/Add Reactions. No `webhook_url` key anymore.
+- **`router-ssh-key`** / **`case-ssh-key`** (`apps` namespace, out-of-band):
+  dedicated ed25519 keypairs, public half authorized on the router/Case
+  respectively — not the same key used for interactive SSH access.
+- **`github-pat`** (`apps` namespace, key `token`): the same classic PAT
+  wired into Argo CD's repo credentials, reused for `gh issue` read/write.
+- **`uptime-kuma-push`** (`apps` namespace): one push-monitor URL per key
+  (`pod_health_check_url`, `resource_pressure_check_url`,
   `tars_appdata_backup_url`, `case_worker_appdata_backup_url`,
-  `pi_appdata_backup_url`), created out-of-band. `pod-health-check` and
-  `resource-pressure-check` ping their URL unconditionally at the end of
-  every run (after any Discord post); the three backup CronJobs ping only
-  on success. This catches a job crashing or silently failing to run at
-  all — a case the Discord-only alerting above can't see, since a crashed
-  script never reaches its own "post to Discord" step. The five Push
-  monitors are configured in Uptime Kuma itself (not tracked in git), with
-  the existing Discord notification attached.
-
-**Note on testing changes here**: because `selfHeal: true` is on, a live
-`kubectl apply` against anything Argo CD manages gets silently reverted
-back to match `main` within moments (on ArgoCD's own reconcile cycle, not
-instantly — a live test can appear to pass by winning a race against that
-cycle, then fail once merged if the actual committed content is broken) —
-validate with `--dry-run=client`, but treat a live-tested-before-merge
-result as provisional and re-verify after the real merge lands.
-
-### Claude-triaged alerts
-
-`pod-health-check` is where all Claude/`gh` triage actually happens, since
-it's the only alert source both unpinned from any specific node *and*
-running frequently (every 15 min). Two ways a finding gets to it:
-
-1. **Direct** (`pod-health-check`, `resource-pressure-check`): neither is
-   node-pinned for hostPath reasons, so both are scheduled onto
-   `k3s-worker-case` alongside the `claude-code-config-pvc` and triage their
-   own findings in the same run they detect them in.
-2. **Queued** (everything else that used to only send an email or a raw
-   Discord ping): `arr-queue-check`, `deluge-stall-check`, and the three
-   `*-appdata-backup` CronJobs, plus `tars-updater-agent`'s critical-CVE
-   alert, drop a small
-   text file in `.tars-triage-queue/` on the shared `nfs-media-pvc` (already
-   mounted in most of them for other reasons) whenever they'd otherwise have
-   emailed/alerted. `pod-health-check` drains that directory every run,
-   folds each file's content in alongside its own findings, and deletes them
-   only after a successful triage+post — a failed run leaves them for the
-   next attempt. This exists because those jobs are hard node-pinned (the
-   backups, to their own host's hostPath) or simply not built to run Claude
-   themselves (`tars-updater-agent`'s own container image), so they can't
-   co-locate with the Claude config PVC directly.
-   - Not everything routes here: `tars-updater-agent`'s weekly OS/update
-     digest is a routine informational summary, not a problem report —
-     opening a GitHub issue over "a package has an update available"
-     doesn't make sense, so it's posted as a plain message via the `Tars`
-     bot to a dedicated digest channel (`DIGEST_CHANNEL_ID`) instead of
-     going through triage.
-   - Argo CD's and Uptime Kuma's native notifications are also excluded —
-     both only know how to POST to a fixed webhook URL, with no hook for a
-     custom script to redirect through.
-
-Either way, once there's something to triage, Claude checks `gh issue list`
-for an existing open issue covering the finding before deciding whether to
-open a new one, comment on the existing one, or conclude it's not actually
-worth tracking. Claude's final response is a single Discord-ready line,
-posted via the **`Tars` Discord bot** (not a webhook) as a new Forum post
-using `POST /channels/{id}/threads`. Which of three Forum channels depends
-on the finding's source — `pod-health-check`'s/`resource-pressure-check`'s
-own findings and the appdata-backup queue files share one general
-tracked-issues channel; `arr-queue-check` and `tars-updater-agent`'s
-critical-CVE queue files each get their own dedicated channel — kept
-separate from the regular alerts channel so tracked issues don't mix with
-raw noise, and from each other so they're independently readable.
-
-A bot (rather than a webhook) is what makes routing to three different
-channels straightforward: one bot token can post to any channel it has
-permission in, whereas each destination would otherwise need its own
-webhook. `bot_token` (`discord-alerts` Secret) is the same bot used for
-the resolved-issue reaction below — invited to the server once, with Send
-Messages/Create Posts in Forums/Add Reactions granted broadly (simplest
-for a personal homelab; scoping per-channel is possible if desired).
-
-Needs, on top of what `pod-health-check`/`resource-pressure-check` already
-require:
-- `claude-code-config-pvc` mounted read-write at `/root/.claude` (same PVC
-  the `claude-code` dev pod uses — its login is what authenticates these,
-  no separate Anthropic API key)
-- `github-pat` Secret (`apps` namespace, key `token`): the same classic PAT
-  wired into Argo CD's repo credentials, reused here for `gh issue`
-  read/write access via `GH_TOKEN`
-- `GITHUB_REPO` env var (`ehulle117/tars`)
-- `TRACKED_ISSUES_CHANNEL_ID` / `ARR_QUEUE_CHANNEL_ID` /
-  `UPDATER_AGENT_CHANNEL_ID` env vars (plain channel ID values, not secret)
-- Queue writers need `nfs-media-pvc` mounted (most already have it) and
-  write to `<mount>/.tars-triage-queue/<source>-<timestamp>.txt` — the
-  filename prefix (`arr-queue-check-`, `tars-updater-critical-cve-`, or
-  anything else) is what routes a queued finding to the right channel
+  `pi_appdata_backup_url`). `pod-health-check`/`resource-pressure-check`
+  ping unconditionally at the end of every run; the backup CronJobs ping
+  only on success. This catches a job crashing before it ever reaches its
+  own queue-write step — something the queue/triage alerting above can't
+  see on its own. Configured in Uptime Kuma itself (not tracked in git).
 
 ### Resolved-issue notice back to Discord
 

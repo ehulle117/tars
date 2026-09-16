@@ -1,0 +1,151 @@
+# Shared Discord/triage helpers, mounted read-only into every detector and
+# into tars-alert-triage. Single source of truth for "how we talk to
+# Discord" - before this existed, discord_post/post_and_track were copied
+# almost verbatim into pod-health-check.py, resource-pressure-check.py, and
+# tars-insight-digest.yaml, and drifted slightly out of sync with each other.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alert-lib
+  namespace: apps
+data:
+  alert_lib.py: |
+    import json
+    import re
+    import subprocess
+
+
+    def discord_post(bot_token, path, payload):
+        # Discord's edge blocks Python urllib's TLS/HTTP fingerprint with a
+        # 403; shelling out to busybox wget (present in python:3.12-alpine)
+        # avoids it.
+        result = subprocess.run(
+            ["wget", "-q", "-O-", "--header=Authorization: Bot " + bot_token,
+             "--header=Content-Type: application/json",
+             "--post-data", json.dumps(payload),
+             f"https://discord.com/api/v10{path}"],
+            check=True, timeout=15, capture_output=True, text=True,
+        )
+        return json.loads(result.stdout)
+
+
+    def post_digest(bot_token, channel_id, thread_name, content):
+        """Posts a plain informational message to the digest channel as a
+        new Forum thread - no GitHub issue, no triage, no resolution
+        tracking. For routine "you should know this" info (software
+        updates) that isn't a problem report."""
+        payload = {"name": thread_name[:100], "message": {"content": content}}
+        return discord_post(bot_token, f"/channels/{channel_id}/threads", payload)
+
+
+    def post_and_track(bot_token, channel_id, source_label, message, repo, action=None, issue_num=None):
+        """Posts a triage decision to Discord (new Forum thread, or a reply
+        in an existing issue's original thread for a recurring finding), and
+        stashes the thread+message id on a newly-opened issue so
+        issue-closed-notify.yml can find it again later.
+
+        action/issue_num come from a strict machine-parsed status line (see
+        run_triage), not from regexing the free-form message - the model
+        doesn't reliably reproduce exact prose like "Commented on {repo}#12"
+        in its final summary, which silently broke thread reuse for
+        recurring findings.
+        """
+        existing_thread_id = None
+        if action == "commented" and issue_num:
+            try:
+                existing_body = subprocess.run(
+                    ["gh", "issue", "view", issue_num, "--repo", repo, "--json", "body", "-q", ".body"],
+                    capture_output=True, text=True, timeout=30, check=True,
+                ).stdout
+                found = re.search(r"discord_thread_id: (\d+)", existing_body)
+                if found:
+                    existing_thread_id = found.group(1)
+                else:
+                    print(f"Issue #{issue_num} has no discord_thread_id stashed; posting a new thread instead")
+            except Exception as e:
+                print(f"Couldn't look up existing issue's thread (falling back to a new post): {e}")
+
+        if existing_thread_id:
+            posted = discord_post(bot_token, f"/channels/{existing_thread_id}/messages", {"content": message})
+            thread_id, message_id = existing_thread_id, posted["id"]
+        else:
+            thread_name = f"{source_label}: {message}"[:100]
+            posted = discord_post(bot_token, f"/channels/{channel_id}/threads",
+                                   {"name": thread_name, "message": {"content": message}})
+            thread_id, message_id = posted["id"], posted["message"]["id"]
+
+        if action == "opened" and issue_num:
+            try:
+                current_body = subprocess.run(
+                    ["gh", "issue", "view", issue_num, "--repo", repo, "--json", "body", "-q", ".body"],
+                    capture_output=True, text=True, timeout=30, check=True,
+                ).stdout
+                subprocess.run(
+                    ["gh", "issue", "edit", issue_num, "--repo", repo, "--body",
+                     f"{current_body}\n\n<!-- discord_thread_id: {thread_id} discord_message_id: {message_id} -->"],
+                    check=True, timeout=30,
+                )
+            except Exception as e:
+                print(f"Couldn't stash Discord thread id on the new issue (non-fatal): {e}")
+
+        return thread_id, message_id
+
+
+    def triage_prompt(source_label, findings_text, repo):
+        return (
+            f"You are triaging a finding from {source_label}:\n\n"
+            f"{findings_text}\n\n"
+            f'Use `gh issue list --repo {repo} --state open --search "<keywords>"` '
+            "to check whether an open issue already tracks this. Then:\n"
+            "- If it's a genuine, actionable problem with NO existing matching issue: open one with "
+            f'`gh issue create --repo {repo} --title "..." --body "..."`.\n'
+            "- If it's a genuine problem that already HAS a matching open issue: add a short comment "
+            f'with `gh issue comment <number> --repo {repo} --body "..."` noting '
+            "it's still occurring, rather than opening a duplicate.\n"
+            "- If it's not actually worth tracking (transient, already resolving, etc.): do nothing on GitHub.\n\n"
+            "Your response must end with EXACTLY this format - a short line or two of Discord-ready plain "
+            "text summarizing the finding and what you did, then a line containing only three dashes, then "
+            "ONE final status line in one of these three exact forms (no other text after it):\n"
+            "OPENED <issue-number>\n"
+            "COMMENTED <issue-number>\n"
+            "SKIPPED\n\n"
+            "Example:\n"
+            "Opened an issue for the recurring OOMKilled restarts on radarr.\n"
+            "---\n"
+            "OPENED 52\n\n"
+            "No other commentary before, after, or around this."
+        )
+
+
+    def run_triage(prompt):
+        """Runs the Claude triage prompt and splits its output into the
+        Discord-ready message and a strict, separately-parsed status line
+        telling us exactly what it did on GitHub. Falls back to
+        (message, None, None) if the status line is missing or doesn't
+        parse - thread-reuse/stashing is skipped for that run, not a hard
+        failure."""
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--allowedTools", "Bash(gh *)"],
+            capture_output=True, text=True, timeout=180, check=True,
+        )
+        raw = result.stdout.strip()
+
+        message, status_line = raw, ""
+        if "\n---\n" in raw:
+            message_part, _, status_part = raw.rpartition("\n---\n")
+            message = message_part.strip()
+            status_line = status_part.strip().splitlines()[0].strip() if status_part.strip() else ""
+
+        action = issue_num = None
+        m = re.match(r"OPENED\s+(\d+)", status_line)
+        if m:
+            action, issue_num = "opened", m.group(1)
+        else:
+            m = re.match(r"COMMENTED\s+(\d+)", status_line)
+            if m:
+                action, issue_num = "commented", m.group(1)
+            elif not re.match(r"SKIPPED", status_line):
+                print(f"Couldn't parse triage status line ({status_line!r}); posting without thread-reuse/stashing")
+
+        print(f"Resolved triage status: status_line={status_line!r} action={action!r} issue_num={issue_num!r}")
+        return message, action, issue_num

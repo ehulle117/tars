@@ -1,0 +1,155 @@
+# The one place Claude/gh/Discord triage happens. Every detector
+# (pod-health-check, resource-pressure-check, arr-queue-check,
+# deluge-stall-check, router-check, argo-sync-check, case-health-check, the
+# three *-appdata-backup CronJobs, tars-updater-agent's critical-CVE alert)
+# only ever detects and drops a file in .tars-triage-queue/ on the shared
+# nfs-media-pvc - no detector triages its own findings anymore, and none of
+# them know a Discord channel id or hold a GitHub token. This job drains
+# that directory every run: one Claude+gh triage call per queue file (dedup
+# against open issues, open/comment/skip), one Discord post per file to the
+# single ALERTS_CHANNEL_ID, then deletes the file. A failed run leaves files
+# in place for the next attempt.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tars-alert-triage-script
+  namespace: apps
+data:
+  check.py: |
+    import os
+    import re
+    import subprocess
+    import sys
+    import time
+
+    sys.path.insert(0, "/lib")
+    from alert_lib import post_and_track, run_triage, triage_prompt
+
+    BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
+    ALERTS_CHANNEL_ID = os.environ["ALERTS_CHANNEL_ID"]
+    REPO = os.environ["GITHUB_REPO"]
+    QUEUE_DIR = "/queue/.tars-triage-queue"
+
+
+    def run_with_retries(cmd, attempts=3, delay_seconds=10, **kwargs):
+        """Retries a subprocess call a few times before giving up - a single
+        flaky external service (apk mirror, npm registry, GitHub releases)
+        during the bootstrap below used to cost a full pod restart instead
+        of a quick in-process retry (tars#48)."""
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return subprocess.run(cmd, check=True, **kwargs)
+            except subprocess.CalledProcessError as e:
+                last_error = e
+                if attempt < attempts:
+                    print(f"Attempt {attempt}/{attempts} failed ({e}), retrying in {delay_seconds}s...")
+                    time.sleep(delay_seconds)
+        raise last_error
+
+
+    def source_label(fname):
+        # Strip the trailing "-YYYYMMDDHHMMSS.txt" a detector stamps its
+        # queue file with, leaving just the detector's name as the label.
+        return re.sub(r"-\d{14}\.txt$", "", fname)
+
+
+    if not os.path.isdir(QUEUE_DIR) or not os.listdir(QUEUE_DIR):
+        print("Queue empty, nothing to triage.")
+    else:
+        # Bootstrap Claude Code + gh CLI only when there's actually
+        # something to triage.
+        run_with_retries(["sh", "-c",
+            "apk add --no-cache nodejs npm bash curl tar && "
+            "npm install -g @anthropic-ai/claude-code && "
+            "GH_VERSION=$(curl -s https://api.github.com/repos/cli/cli/releases/latest | "
+            "  grep tag_name | cut -d'\"' -f4 | tr -d v) && "
+            "curl -L -o /tmp/gh.tar.gz https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz && "
+            "tar -xzf /tmp/gh.tar.gz -C /tmp && "
+            "install -m 0755 /tmp/gh_${GH_VERSION}_linux_amd64/bin/gh /usr/local/bin/gh && "
+            # Auth config lives at ~/.claude.json, outside the mounted
+            # ~/.claude/ dir, so it's symlinked to the copy the dev pod
+            # (claude-code.yaml) already persisted.
+            "[ -e /root/.claude.json ] && [ ! -L /root/.claude.json ] && mv /root/.claude.json /root/.claude/claude.json; "
+            "ln -sf /root/.claude/claude.json /root/.claude.json"
+        ], timeout=180)
+
+        for fname in sorted(os.listdir(QUEUE_DIR)):
+            fpath = os.path.join(QUEUE_DIR, fname)
+            with open(fpath) as f:
+                findings = f.read().strip()
+            if not findings:
+                os.remove(fpath)
+                continue
+
+            label = source_label(fname)
+            prompt = triage_prompt(label, findings, REPO)
+            message, action, issue_num = run_triage(prompt)
+            message = message or findings
+
+            post_and_track(BOT_TOKEN, ALERTS_CHANNEL_ID, label, message, REPO, action, issue_num)
+            print(f"[{label}] triaged: {message}")
+            os.remove(fpath)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tars-alert-triage
+  namespace: apps
+spec:
+  schedule: "*/15 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          # Co-located with the claude-code dev pod's config PVC so triage
+          # can reuse its existing Claude Code login - no separate Anthropic
+          # API key/billing.
+          nodeSelector:
+            kubernetes.io/hostname: tars
+          containers:
+          - name: tars-alert-triage
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py"]
+            env:
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: discord-alerts
+                  key: bot_token
+            - name: ALERTS_CHANNEL_ID
+              value: "1546905058099331202"
+            - name: GH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: github-pat
+                  key: token
+            - name: GITHUB_REPO
+              value: "ehulle117/tars"
+            - name: HOME
+              value: "/root"
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: lib
+              mountPath: /lib
+            - name: claude-config
+              mountPath: /root/.claude
+            - name: triage-queue
+              mountPath: /queue
+          volumes:
+          - name: script
+            configMap:
+              name: tars-alert-triage-script
+          - name: lib
+            configMap:
+              name: alert-lib
+          - name: claude-config
+            persistentVolumeClaim:
+              claimName: claude-code-config-pvc
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc

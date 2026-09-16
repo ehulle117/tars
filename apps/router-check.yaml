@@ -8,7 +8,11 @@ data:
     import json
     import os
     import subprocess
+    import sys
     from datetime import datetime
+
+    sys.path.insert(0, "/lib")
+    from alert_lib import post_digest
 
     ROUTER_HOST = os.environ["ROUTER_HOST"]
     SSH_KEY_PATH = "/ssh/id_ed25519"
@@ -24,45 +28,45 @@ data:
         return subprocess.run(SSH_BASE + [remote_cmd], capture_output=True, text=True, timeout=timeout)
 
 
-    findings = []
+    # --- WAN reachability: a real problem, goes through the alert queue ---
+    alert_findings = []
 
     wan = ssh_run("ubus call network.interface.wan status")
     if wan.returncode != 0:
         # Covers both "router unreachable" and "ubus/wan iface renamed" -
         # either way it's worth a look, and there's nothing more specific
         # to say without a successful connection.
-        findings.append(f"couldn't reach router or query WAN status: {(wan.stderr or wan.stdout).strip()[:200]}")
+        alert_findings.append(f"couldn't reach router or query WAN status: {(wan.stderr or wan.stdout).strip()[:200]}")
     else:
         try:
             status = json.loads(wan.stdout)
             if not status.get("up"):
-                findings.append("WAN interface is down")
+                alert_findings.append("WAN interface is down")
         except json.JSONDecodeError:
-            findings.append(f"unexpected ubus output: {wan.stdout.strip()[:200]}")
+            alert_findings.append(f"unexpected ubus output: {wan.stdout.strip()[:200]}")
 
-    if not findings:
-        # Only checked when the router's reachable and WAN is up - an
-        # unreachable router already produced a finding above, no need to
-        # double-report it as also missing an update check.
-        upgradable = ssh_run("opkg list-upgradable")
-        if upgradable.returncode == 0 and upgradable.stdout.strip():
-            pkgs = upgradable.stdout.strip().splitlines()
-            findings.append(f"{len(pkgs)} OpenWrt package(s) upgradable: " + ", ".join(p.split()[0] for p in pkgs[:10]))
-
-    if not findings:
-        print("Router reachable, WAN up, no pending package updates.")
-    else:
-        text_body = "\n".join(f"- {f}" for f in findings)
-        print(f"Found {len(findings)} router issue(s), queuing for Claude triage.")
-
-        # Same triage-queue pattern as arr-queue-check/deluge-stall-check:
-        # this job isn't co-located with the Claude config PVC, so
-        # pod-health-check drains and triages it.
+    if alert_findings:
+        text_body = "\n".join(f"- {f}" for f in alert_findings)
+        print(f"Found {len(alert_findings)} router issue(s), queuing for triage.")
         queue_dir = "/queue/.tars-triage-queue"
         os.makedirs(queue_dir, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d%H%M%S")
         with open(f"{queue_dir}/router-check-{stamp}.txt", "w") as f:
             f.write(text_body)
+    else:
+        print("Router reachable, WAN up.")
+
+        # --- pending OS packages: routine info, not a problem - posts
+        # straight to the digest channel, no GitHub issue, no triage ---
+        upgradable = ssh_run("opkg list-upgradable")
+        if upgradable.returncode == 0 and upgradable.stdout.strip():
+            pkgs = upgradable.stdout.strip().splitlines()
+            content = "**Router (OpenWrt) package updates available**\n" + "\n".join(f"- {p.split()[0]}" for p in pkgs[:20])
+            post_digest(os.environ["DISCORD_BOT_TOKEN"], os.environ["DIGEST_CHANNEL_ID"],
+                        f"router: {len(pkgs)} package update(s)", content)
+            print(f"Posted {len(pkgs)} upgradable package(s) to the digest channel.")
+        else:
+            print("No pending router package updates.")
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -84,9 +88,18 @@ spec:
             env:
             - name: ROUTER_HOST
               value: "192.168.8.1"
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: discord-alerts
+                  key: bot_token
+            - name: DIGEST_CHANNEL_ID
+              value: "1547598576111194205"
             volumeMounts:
             - name: script
               mountPath: /scripts
+            - name: lib
+              mountPath: /lib
             - name: ssh-key
               mountPath: /ssh
               readOnly: true
@@ -97,6 +110,9 @@ spec:
           - name: script
             configMap:
               name: router-check-script
+          - name: lib
+            configMap:
+              name: alert-lib
           - name: ssh-key
             secret:
               secretName: router-ssh-key

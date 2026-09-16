@@ -1,0 +1,105 @@
+# Case (Unraid) isn't a k3s node, so resource-pressure-check's node-metrics
+# checks never see it - this covers array/disk health the same way
+# router-check covers the router: SSH in, run a couple of read-only
+# commands, queue findings.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: case-health-check-script
+  namespace: apps
+data:
+  check.py: |
+    import os
+    import re
+    import subprocess
+    from datetime import datetime
+
+    CASE_HOST = os.environ.get("CASE_HOST", "192.168.8.152")
+    SSH_KEY_PATH = "/ssh/id_ed25519"
+    DISK_PCT_THRESHOLD = 90
+
+    SSH_BASE = [
+        "ssh", "-i", SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
+        "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+        f"root@{CASE_HOST}",
+    ]
+
+
+    def ssh_run(remote_cmd, timeout=15):
+        return subprocess.run(SSH_BASE + [remote_cmd], capture_output=True, text=True, timeout=timeout)
+
+
+    findings = []
+
+    array = ssh_run("mdcmd status")
+    if array.returncode != 0:
+        findings.append(f"couldn't reach Case or query array status: {(array.stderr or array.stdout).strip()[:200]}")
+    else:
+        fields = dict(line.split("=", 1) for line in array.stdout.splitlines() if "=" in line)
+        state = fields.get("mdState", "unknown")
+        if state != "STARTED":
+            findings.append(f"array state is `{state}` (expected STARTED)")
+        for bad_field in ("mdNumDisabled", "mdNumInvalid", "mdNumMissing", "mdNumWrong"):
+            count = int(fields.get(bad_field, 0) or 0)
+            if count:
+                findings.append(f"array reports {bad_field}={count}")
+
+    df = ssh_run("df -h /mnt/user")
+    if df.returncode != 0:
+        findings.append(f"couldn't check disk usage: {(df.stderr or df.stdout).strip()[:200]}")
+    else:
+        m = re.search(r"(\d+)%", df.stdout)
+        if m and int(m.group(1)) >= DISK_PCT_THRESHOLD:
+            findings.append(f"`/mnt/user` disk usage at {m.group(1)}%")
+
+    if not findings:
+        print("Case array started, disk usage under threshold.")
+    else:
+        text_body = "\n".join(f"- {f}" for f in findings)
+        print(f"Found {len(findings)} Case issue(s), queuing for triage.")
+        queue_dir = "/queue/.tars-triage-queue"
+        os.makedirs(queue_dir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        with open(f"{queue_dir}/case-health-check-{stamp}.txt", "w") as f:
+            f.write(text_body)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: case-health-check
+  namespace: apps
+spec:
+  schedule: "*/30 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: case-health-check
+            image: python:3.12-alpine
+            command: ["sh", "-c", "apk add --no-cache openssh-client >/dev/null && python /scripts/check.py"]
+            env:
+            - name: CASE_HOST
+              value: "192.168.8.152"
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: ssh-key
+              mountPath: /ssh
+              readOnly: true
+            - name: triage-queue
+              mountPath: /queue
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: case-health-check-script
+          - name: ssh-key
+            secret:
+              secretName: case-ssh-key
+              defaultMode: 0400
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc
