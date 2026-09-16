@@ -86,11 +86,9 @@ spec:
       labels:
         app: valheim
     spec:
-      # Moved off tars 2026-09-10 to free it for the actively-played
-      # valheim2 world -- this one is idle (replicas: 0), so it just sits
-      # here the same way it sat on tars.
+      # Back on tars 2026-09-16, part of retiring k3s-worker-case.
       nodeSelector:
-        kubernetes.io/hostname: k3s-worker-case
+        kubernetes.io/hostname: tars
       serviceAccountName: valheim-tailscale
       containers:
         - name: valheim
