@@ -79,7 +79,7 @@ ID. Two channels total:
 - **Alerts channel** (`ALERTS_CHANNEL_ID`, Forum) — every triaged problem
   from every detector, one thread per tracked issue, thread title
   `<source>: <summary>`.
-- **Digest channel** (`DIGEST_CHANNEL_ID`, `1547598576111194205`, plain
+- **Digest channel** (`DIGEST_CHANNEL_ID`, `1546986016861192202`, plain
   channel) — routine "you should know this" info that isn't a problem:
   `tars-updater-agent`'s weekly OS/container update summary, and
   `router-check`'s list of upgradable `opkg` packages. Posted directly, no

@@ -94,7 +94,7 @@ spec:
                   name: discord-alerts
                   key: bot_token
             - name: DIGEST_CHANNEL_ID
-              value: "1547598576111194205"
+              value: "1546986016861192202"
             - name: DB_PATH
               value: "/data/state.db"
           volumeMounts:
