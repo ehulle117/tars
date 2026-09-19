@@ -1,0 +1,145 @@
+# Lets Etan @-mention the Tars bot to restart Ashlands Ascendant (the
+# native Docker Valheim server on `case`, see apps/valheim.yaml's git
+# history for context) remotely -- e.g. from a phone, when the
+# "Game server connected failed" stuck state recurs and nobody's home to
+# SSH in. The valheim2-watchdog CronJob-equivalent user script on `case`
+# already auto-restarts on a schedule; this is the on-demand version for
+# when that's too slow or someone just wants to force it.
+#
+# Reuses the existing Tars bot token (discord-alerts/bot_token, same one
+# router-check/tars-alert-triage post with) and the case-ssh-key Secret
+# (same one case-health-check.yaml already uses to SSH into `case`) --
+# no new bot application, no new keys.
+#
+# Restricted to ALLOWED_USER_ID (Etan's Discord user ID) -- anyone else
+# who @-mentions the bot gets told no.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valheim2-restart-bot-script
+  namespace: apps
+data:
+  bot.py: |
+    import logging
+    import os
+    import subprocess
+
+    import discord
+
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger("valheim2-restart-bot")
+
+    TOKEN = os.environ["DISCORD_BOT_TOKEN"]
+    ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
+    CASE_HOST = os.environ.get("CASE_HOST", "192.168.8.152")
+    CONTAINER_NAME = os.environ.get("CONTAINER_NAME", "ashlands-ascendant")
+    SSH_KEY_PATH = "/ssh/id_ed25519"
+
+    SSH_BASE = [
+        "ssh", "-i", SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
+        "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+        f"root@{CASE_HOST}",
+    ]
+
+    intents = discord.Intents.default()
+    client = discord.Client(intents=intents)
+
+
+    @client.event
+    async def on_ready():
+        log.info("Logged in as %s", client.user)
+
+
+    @client.event
+    async def on_message(message):
+        if message.author.bot or client.user not in message.mentions:
+            return
+
+        if message.author.id != ALLOWED_USER_ID:
+            await message.reply("Not authorized to do that.")
+            return
+
+        await message.reply(f"Restarting `{CONTAINER_NAME}` on case...")
+        try:
+            result = subprocess.run(
+                SSH_BASE + [f"docker restart {CONTAINER_NAME}"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            await message.reply("SSH to case timed out.")
+            return
+
+        if result.returncode == 0:
+            await message.reply(
+                f"Restarted `{CONTAINER_NAME}`. Give it ~30-60s to come back up "
+                "(Steam verify + world load)."
+            )
+        else:
+            err = (result.stderr or result.stdout).strip()[:500]
+            await message.reply(f"Restart failed: `{err}`")
+
+
+    client.run(TOKEN)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valheim2-restart-bot
+  namespace: apps
+  labels:
+    app: valheim2-restart-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: valheim2-restart-bot
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: valheim2-restart-bot
+    spec:
+      containers:
+        - name: bot
+          image: python:3.12-alpine
+          command:
+            - sh
+            - -c
+            - |
+              apk add --no-cache openssh-client >/dev/null
+              pip install --quiet --no-cache-dir discord.py
+              python /scripts/bot.py
+          env:
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: discord-alerts
+                  key: bot_token
+            - name: ALLOWED_USER_ID
+              value: "251566145092452352"
+            - name: CASE_HOST
+              value: "192.168.8.152"
+            - name: CONTAINER_NAME
+              value: "ashlands-ascendant"
+          resources:
+            requests:
+              cpu: 20m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: ssh-key
+              mountPath: /ssh
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: valheim2-restart-bot-script
+        - name: ssh-key
+          secret:
+            secretName: case-ssh-key
+            defaultMode: 0400
