@@ -11,8 +11,10 @@
 # (same one case-health-check.yaml already uses to SSH into `case`) --
 # no new bot application, no new keys.
 #
-# Restricted to ALLOWED_USER_ID (Etan's Discord user ID) -- anyone else
-# who @-mentions the bot gets told no.
+# Restricted to ALLOWED_USER_IDS (comma-separated Discord user IDs) --
+# anyone else who @-mentions the bot gets told no. Only fires on
+# "@Tars restart valheim" (case/whitespace-insensitive) so a plain
+# @mention in conversation doesn't trigger a restart by accident.
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -23,6 +25,7 @@ data:
   bot.py: |
     import logging
     import os
+    import re
     import subprocess
 
     import discord
@@ -31,10 +34,13 @@ data:
     log = logging.getLogger("valheim2-restart-bot")
 
     TOKEN = os.environ["DISCORD_BOT_TOKEN"]
-    ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
+    ALLOWED_USER_IDS = {
+        int(uid) for uid in os.environ["ALLOWED_USER_IDS"].split(",") if uid.strip()
+    }
     CASE_HOST = os.environ.get("CASE_HOST", "192.168.8.152")
     CONTAINER_NAME = os.environ.get("CONTAINER_NAME", "ashlands-ascendant")
     SSH_KEY_PATH = "/ssh/id_ed25519"
+    COMMAND_PHRASE = "restart valheim"
 
     SSH_BASE = [
         "ssh", "-i", SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
@@ -51,13 +57,26 @@ data:
         log.info("Logged in as %s", client.user)
 
 
+    def strip_mentions(content):
+        """Removes <@id>/<@!id> mention tokens, collapses whitespace, lowercases."""
+        text = re.sub(r"<@!?\d+>", "", content)
+        return re.sub(r"\s+", " ", text).strip().lower()
+
+
     @client.event
     async def on_message(message):
         if message.author.bot or client.user not in message.mentions:
             return
 
-        if message.author.id != ALLOWED_USER_ID:
+        if message.author.id not in ALLOWED_USER_IDS:
             await message.reply("Not authorized to do that.")
+            return
+
+        command = strip_mentions(message.content)
+        if COMMAND_PHRASE not in command:
+            await message.reply(
+                f'Mention me with "restart valheim" to restart `{CONTAINER_NAME}`.'
+            )
             return
 
         await message.reply(f"Restarting `{CONTAINER_NAME}` on case...")
@@ -117,7 +136,7 @@ spec:
                 secretKeyRef:
                   name: discord-alerts
                   key: bot_token
-            - name: ALLOWED_USER_ID
+            - name: ALLOWED_USER_IDS
               value: "251566145092452352"
             - name: CASE_HOST
               value: "192.168.8.152"
