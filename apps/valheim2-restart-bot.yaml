@@ -68,16 +68,27 @@ data:
         if message.author.bot or client.user not in message.mentions:
             return
 
+        log.info(
+            "mentioned by %s (%s) in guild=%s channel=%s content=%r",
+            message.author, message.author.id,
+            message.guild.id if message.guild else "dm",
+            message.channel.id, message.content,
+        )
+
         if message.author.id not in ALLOWED_USER_IDS:
+            log.info("rejected: %s not in ALLOWED_USER_IDS=%s", message.author.id, ALLOWED_USER_IDS)
             await message.reply("Not authorized to do that.")
             return
 
         command = strip_mentions(message.content)
         if COMMAND_PHRASE not in command:
+            log.info("rejected: stripped content %r does not contain %r", command, COMMAND_PHRASE)
             await message.reply(
                 f'Mention me with "restart valheim" to restart `{CONTAINER_NAME}`.'
             )
             return
+
+        log.info("authorized restart request from %s", message.author.id)
 
         await message.reply(f"Restarting `{CONTAINER_NAME}` on case...")
         try:
