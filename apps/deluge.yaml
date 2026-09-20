@@ -83,6 +83,21 @@ spec:
               mountPath: /config
             - name: media
               mountPath: /downloads
+          livenessProbe:
+            # arch-delugevpn brings up a tun0 interface once the VPN tunnel
+            # is established, then firewalls all torrent traffic if it ever
+            # drops - the process/web UI stays "up" either way, so this is
+            # the only way to actually detect a dead tunnel and get k8s to
+            # restart the pod instead of leaving every torrent stalled
+            # (tars#87).
+            exec:
+              command:
+                - sh
+                - -c
+                - ip addr show tun0 | grep -q "inet "
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            failureThreshold: 3
       volumes:
         - name: config
           persistentVolumeClaim:
