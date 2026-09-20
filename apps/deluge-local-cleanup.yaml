@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deluge-local-cleanup-script
+  namespace: apps
+data:
+  cleanup.py: |
+    import json
+    import os
+    import re
+    import sys
+    import urllib.request
+
+    try:
+        from deluge_client import DelugeRPCClient
+    except ImportError:
+        os.system(f"{sys.executable} -m pip install --quiet deluge-client")
+        from deluge_client import DelugeRPCClient
+
+    DELUGE_HOST = os.environ.get("DELUGE_HOST", "deluge-svc.apps.svc.cluster.local")
+    DELUGE_PORT = int(os.environ.get("DELUGE_PORT", "58846"))
+    DELUGE_USERNAME = os.environ["DELUGE_USERNAME"]
+    DELUGE_PASSWORD = os.environ["DELUGE_PASSWORD"]
+
+    RADARR_HOST = "radarr-svc.apps.svc.cluster.local"
+    RADARR_PORT = 7878
+    RADARR_API_KEY = os.environ["RADARR_API_KEY"]
+
+    BLURAY_QUALITY_MARKERS = ("Bluray", "Remux", "BR-DISK")
+
+
+    def radarr_movies():
+        req = urllib.request.Request(
+            f"http://{RADARR_HOST}:{RADARR_PORT}/api/v3/movie",
+            headers={"X-Api-Key": RADARR_API_KEY},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+
+
+    def norm(title):
+        return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+
+
+    def is_imported(movie):
+        mf = movie.get("movieFile") or {}
+        quality = mf.get("quality", {}).get("quality", {}).get("name", "")
+        return bool(quality) and any(marker in quality for marker in BLURAY_QUALITY_MARKERS)
+
+
+    movies = radarr_movies()
+    # only consider movies already confirmed at Bluray/Remux/BR-DISK quality --
+    # anything still pending shouldn't have its local seed touched even if 100%
+    # downloaded, since it may still be mid manual-import.
+    imported_titles = [norm(m["title"]) for m in movies if is_imported(m)]
+
+    client = DelugeRPCClient(DELUGE_HOST, DELUGE_PORT, DELUGE_USERNAME, DELUGE_PASSWORD)
+    client.connect()
+
+    torrents = client.call(
+        "core.get_torrents_status",
+        {},
+        [b"name", b"is_seed", b"save_path"],
+    )
+
+    removed = []
+    for torrent_id, status in torrents.items():
+        if not status.get(b"is_seed"):
+            continue
+        save_path = (status.get(b"save_path") or b"").decode(errors="replace")
+        if not save_path.startswith("/downloads"):
+            continue
+        name = status.get(b"name", torrent_id).decode(errors="replace")
+        name_norm = norm(name)
+        if not any(title and title in name_norm for title in imported_titles):
+            continue
+        client.call("core.remove_torrent", [torrent_id, True])
+        removed.append(name)
+
+    if removed:
+        print(f"Removed {len(removed)} already-imported torrent(s) and their local data:")
+        for line in removed:
+            print(f"  - {line}")
+    else:
+        print("No already-imported seeding torrents to clean up.")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: deluge-local-cleanup
+  namespace: apps
+spec:
+  schedule: "*/15 * * * *" # every 15 minutes
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: deluge-local-cleanup
+            image: python:3.12-alpine
+            command: ["python", "/scripts/cleanup.py"]
+            env:
+            - name: DELUGE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: deluge-rpc-auth
+                  key: USERNAME
+            - name: DELUGE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: deluge-rpc-auth
+                  key: PASSWORD
+            - name: RADARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: RADARR_API_KEY
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: deluge-local-cleanup-script
