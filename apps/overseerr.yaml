@@ -44,7 +44,7 @@ spec:
           # fixed upstream in Next.js 16.3.3+) - seerr is still on Next.js
           # 16.2.6 as of this tag; the bump is merged to main but not yet in
           # a tagged release. Re-check on the next tagged release.
-          image: ghcr.io/seerr-team/seerr:3.4.1
+          image: ghcr.io/seerr-team/seerr:v3.4.1
           env:
             - name: TZ
               value: "America/New_York"

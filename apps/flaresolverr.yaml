@@ -22,7 +22,7 @@ spec:
           # Pinned instead of :latest (tars#73) - v3.5.2 bumps the bundled
           # Chromium, which is what CVE-2026-87544 (a Chrome CVE) actually
           # lives in.
-          image: ghcr.io/flaresolverr/flaresolverr:3.5.2
+          image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
           env:
             - name: TZ
               value: "America/New_York"

@@ -95,7 +95,7 @@ spec:
           # to community-valheim-tools, which is the one that actually ships
           # 1.0 support (chunked world save dirs).
           # Pinned instead of :latest (tars#62) to the current release.
-          image: ghcr.io/community-valheim-tools/valheim-server:v1.4.0
+          image: ghcr.io/community-valheim-tools/valheim-server:1.4.0
           env:
             - name: SERVER_NAME
               valueFrom:
