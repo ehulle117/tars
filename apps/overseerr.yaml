@@ -38,7 +38,13 @@ spec:
         fsGroup: 1000
       containers:
         - name: overseerr
-          image: ghcr.io/seerr-team/seerr:latest
+          # Pinned instead of :latest (tars#61) - v3.4.1 fixes CVE-2026-73291
+          # (path traversal -> RCE in the image proxy). Note: it does NOT yet
+          # include the Next.js fix for GHSA-2xp9-vwfh-vxw4 (AVIF decode RCE,
+          # fixed upstream in Next.js 16.3.3+) - seerr is still on Next.js
+          # 16.2.6 as of this tag; the bump is merged to main but not yet in
+          # a tagged release. Re-check on the next tagged release.
+          image: ghcr.io/seerr-team/seerr:3.4.1
           env:
             - name: TZ
               value: "America/New_York"

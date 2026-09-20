@@ -19,7 +19,10 @@ spec:
         kubernetes.io/hostname: tars
       containers:
         - name: flaresolverr
-          image: ghcr.io/flaresolverr/flaresolverr:latest
+          # Pinned instead of :latest (tars#73) - v3.5.2 bumps the bundled
+          # Chromium, which is what CVE-2026-87544 (a Chrome CVE) actually
+          # lives in.
+          image: ghcr.io/flaresolverr/flaresolverr:3.5.2
           env:
             - name: TZ
               value: "America/New_York"
