@@ -83,13 +83,19 @@ data:
                 continue
 
             label = source_label(fname)
-            prompt = triage_prompt(label, findings, REPO)
-            message, action, issue_num = run_triage(prompt)
-            message = message or findings
+            try:
+                prompt = triage_prompt(label, findings, REPO)
+                message, action, issue_num = run_triage(prompt)
+                message = message or findings
 
-            post_and_track(BOT_TOKEN, ALERTS_CHANNEL_ID, label, message, REPO, action, issue_num)
-            print(f"[{label}] triaged: {message}")
-            os.remove(fpath)
+                post_and_track(BOT_TOKEN, ALERTS_CHANNEL_ID, label, message, REPO, action, issue_num)
+                print(f"[{label}] triaged: {message}")
+                os.remove(fpath)
+            except Exception as e:
+                # Leave the file in place for the next scheduled run rather
+                # than crashing the pod - one bad file used to take down
+                # triage for every other file in the queue too (tars#85).
+                print(f"[{label}] triage failed, leaving in queue for retry: {e}")
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -98,6 +104,7 @@ metadata:
   namespace: apps
 spec:
   schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
@@ -131,6 +138,13 @@ spec:
               value: "ehulle117/tars"
             - name: HOME
               value: "/root"
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
             volumeMounts:
             - name: script
               mountPath: /scripts
