@@ -51,7 +51,7 @@ spec:
               mountPath: /data
             - name: media
               mountPath: /media
-            - name: media
+            - name: downloads
               mountPath: /downloads
       volumes:
         - name: config
@@ -60,6 +60,9 @@ spec:
         - name: media
           persistentVolumeClaim:
             claimName: nfs-media-pvc
+        - name: downloads
+          persistentVolumeClaim:
+            claimName: deluge-downloads-pvc
 ---
 apiVersion: v1
 kind: Service
