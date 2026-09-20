@@ -42,8 +42,8 @@ spec:
           # (path traversal -> RCE in the image proxy). Note: it does NOT yet
           # include the Next.js fix for GHSA-2xp9-vwfh-vxw4 (AVIF decode RCE,
           # fixed upstream in Next.js 16.3.3+) - seerr is still on Next.js
-          # 16.2.6 as of this tag; the bump is merged to main but not yet in
-          # a tagged release. Re-check on the next tagged release.
+          # 16.2.6 as of this tag; the bump (seerr-team/seerr#3150) is still
+          # an open PR, not merged. Re-check once it lands and ships in a tag.
           image: ghcr.io/seerr-team/seerr:v3.4.1
           env:
             - name: TZ
