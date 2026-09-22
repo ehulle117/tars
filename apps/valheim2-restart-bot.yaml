@@ -148,7 +148,7 @@ spec:
                   name: discord-alerts
                   key: bot_token
             - name: ALLOWED_USER_IDS
-              value: "251566145092452352,472065214276304896"
+              value: "251566145092452352,472065214276304896,350408686025441280"
             - name: CASE_HOST
               value: "192.168.8.152"
             - name: CONTAINER_NAME
