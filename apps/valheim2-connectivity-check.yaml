@@ -1,0 +1,122 @@
+# Watches for the recurring "Game server connected failed" Steam handshake
+# disruption on Ashlands Ascendant (see 2026-09-2{1,2} incidents) and posts
+# directly to the Discord digest channel the moment it starts/clears -
+# skips tars-alert-triage's queue (15 min poll, plus GitHub-issue overhead)
+# since this is an already-understood, self-resolving flake, not a new
+# problem that needs triage judgment. Runs every 2 min so Etan hears about
+# it before players do, not after.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valheim2-connectivity-check-script
+  namespace: apps
+data:
+  check.py: |
+    import os
+    import subprocess
+    import sys
+
+    sys.path.insert(0, "/alert-lib")
+    from alert_lib import post_digest
+
+    CASE_HOST = os.environ.get("CASE_HOST", "192.168.8.152")
+    SSH_KEY_PATH = "/ssh/id_ed25519"
+    STATE_FILE = "/queue/.valheim2-connectivity-alert-state"
+
+    SSH_BASE = [
+        "ssh", "-i", SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
+        "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+        f"root@{CASE_HOST}",
+    ]
+
+    logs = subprocess.run(
+        SSH_BASE + ["docker logs ashlands-ascendant --since 3m 2>&1"],
+        capture_output=True, text=True, timeout=20,
+    )
+    if logs.returncode != 0:
+        print(f"couldn't reach Case or read logs: {(logs.stderr or logs.stdout).strip()[:200]}")
+        sys.exit(0)
+
+    lines = logs.stdout.splitlines()
+    last_fail = last_success = -1
+    for i, line in enumerate(lines):
+        if "Game server connected failed" in line:
+            last_fail = i
+        elif "Game server connected" in line:
+            last_success = i
+
+    currently_failing = last_fail > last_success
+    was_alerting = os.path.exists(STATE_FILE)
+
+    if currently_failing and not was_alerting:
+        content = (
+            "**Valheim 2 (Ashlands Ascendant) can't accept connections right now** - "
+            "repeated `Game server connected failed` in the last 3 minutes. "
+            "Usually self-resolves in a few minutes (watchdog restarts it if it doesn't); "
+            "known recurring Steam-handshake flake, not new."
+        )
+        post_digest(os.environ["DISCORD_BOT_TOKEN"], os.environ["DIGEST_CHANNEL_ID"],
+                    "valheim2: connection failures", content)
+        open(STATE_FILE, "w").close()
+        print("Posted start-of-incident alert.")
+    elif not currently_failing and was_alerting:
+        post_digest(os.environ["DISCORD_BOT_TOKEN"], os.environ["DIGEST_CHANNEL_ID"],
+                    "valheim2: recovered", "**Valheim 2 is accepting connections again.**")
+        os.remove(STATE_FILE)
+        print("Posted recovery notice.")
+    else:
+        print(f"No state change (currently_failing={currently_failing}, was_alerting={was_alerting}).")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: valheim2-connectivity-check
+  namespace: apps
+spec:
+  schedule: "*/2 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: valheim2-connectivity-check
+            image: python:3.12-alpine
+            command: ["sh", "-c", "apk add --no-cache openssh-client >/dev/null && python /scripts/check.py"]
+            env:
+            - name: CASE_HOST
+              value: "192.168.8.152"
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: discord-alerts
+                  key: bot_token
+            - name: DIGEST_CHANNEL_ID
+              value: "1546986016861192202"
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: lib
+              mountPath: /alert-lib
+            - name: ssh-key
+              mountPath: /ssh
+              readOnly: true
+            - name: triage-queue
+              mountPath: /queue
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: valheim2-connectivity-check-script
+          - name: lib
+            configMap:
+              name: alert-lib
+          - name: ssh-key
+            secret:
+              secretName: case-ssh-key
+              defaultMode: 0400
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc
