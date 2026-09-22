@@ -17,7 +17,15 @@ data:
     import sys
 
     sys.path.insert(0, "/alert-lib")
-    from alert_lib import post_digest
+    from alert_lib import discord_post
+
+    # post_digest creates a Forum-channel thread; DIGEST_CHANNEL_ID here is
+    # a plain text channel, so post a normal message instead - a thread
+    # create there silently drops the starter message (message_count stays
+    # 0) since text channels don't support the Forum thread-with-message
+    # shape.
+    def post_message(bot_token, channel_id, content):
+        discord_post(bot_token, f"/channels/{channel_id}/messages", {"content": content})
 
     CASE_HOST = os.environ.get("CASE_HOST", "192.168.8.152")
     SSH_KEY_PATH = "/ssh/id_ed25519"
@@ -55,13 +63,12 @@ data:
             "Usually self-resolves in a few minutes (watchdog restarts it if it doesn't); "
             "known recurring Steam-handshake flake, not new."
         )
-        post_digest(os.environ["DISCORD_BOT_TOKEN"], os.environ["DIGEST_CHANNEL_ID"],
-                    "valheim2: connection failures", content)
+        post_message(os.environ["DISCORD_BOT_TOKEN"], os.environ["DIGEST_CHANNEL_ID"], content)
         open(STATE_FILE, "w").close()
         print("Posted start-of-incident alert.")
     elif not currently_failing and was_alerting:
-        post_digest(os.environ["DISCORD_BOT_TOKEN"], os.environ["DIGEST_CHANNEL_ID"],
-                    "valheim2: recovered", "**Valheim 2 is accepting connections again.**")
+        post_message(os.environ["DISCORD_BOT_TOKEN"], os.environ["DIGEST_CHANNEL_ID"],
+                     "**Valheim 2 is accepting connections again.**")
         os.remove(STATE_FILE)
         print("Posted recovery notice.")
     else:
