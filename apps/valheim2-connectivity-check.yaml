@@ -94,7 +94,7 @@ spec:
                   name: discord-alerts
                   key: bot_token
             - name: DIGEST_CHANNEL_ID
-              value: "1546986016861192202"
+              value: "1552090801050488952"
             volumeMounts:
             - name: script
               mountPath: /scripts
