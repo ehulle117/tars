@@ -39,8 +39,6 @@ spec:
           effect: NoSchedule
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
-      imagePullSecrets:
-        - name: adsb-tools-ghcr-pull
       containers:
         - name: poller
           image: ghcr.io/ehulle117/tars-adsb-tools:latest
@@ -105,8 +103,6 @@ spec:
           operator: Equal
           value: arm64
           effect: NoSchedule
-      imagePullSecrets:
-        - name: adsb-tools-ghcr-pull
       containers:
         - name: map
           image: ghcr.io/ehulle117/tars-adsb-tools:latest
@@ -166,8 +162,6 @@ spec:
           operator: Equal
           value: arm64
           effect: NoSchedule
-      imagePullSecrets:
-        - name: adsb-tools-ghcr-pull
       containers:
         - name: coverage
           image: ghcr.io/ehulle117/tars-adsb-tools:latest
