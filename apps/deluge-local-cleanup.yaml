@@ -9,6 +9,7 @@ data:
     import os
     import re
     import sys
+    import time
     import urllib.request
 
     try:
@@ -48,20 +49,47 @@ data:
         return bool(quality) and any(marker in quality for marker in BLURAY_QUALITY_MARKERS)
 
 
+    def connect_and_get_torrents(attempts=3, delay_seconds=10):
+        """A fresh Deluge RPC connection per attempt - deluge_client's own
+        automatic_reconnect doesn't help when the daemon itself is just slow
+        to answer, and an unhandled timeout here used to crash the pod every
+        run (tars#100/#102 - this job was hammering Deluge with failed
+        reconnects on a tight OnFailure loop, plausibly starving Lidarr's
+        own connection)."""
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            try:
+                client = DelugeRPCClient(
+                    DELUGE_HOST, DELUGE_PORT, DELUGE_USERNAME, DELUGE_PASSWORD, timeout=30
+                )
+                client.connect()
+                torrents = client.call(
+                    "core.get_torrents_status",
+                    {},
+                    [b"name", b"is_seed", b"save_path"],
+                )
+                return client, torrents
+            except Exception as e:
+                last_error = e
+                if attempt < attempts:
+                    print(f"Attempt {attempt}/{attempts} failed ({e}), retrying in {delay_seconds}s...")
+                    time.sleep(delay_seconds)
+        raise last_error
+
+
     movies = radarr_movies()
     # only consider movies already confirmed at Bluray/Remux/BR-DISK quality --
     # anything still pending shouldn't have its local seed touched even if 100%
     # downloaded, since it may still be mid manual-import.
     imported_titles = [norm(m["title"]) for m in movies if is_imported(m)]
 
-    client = DelugeRPCClient(DELUGE_HOST, DELUGE_PORT, DELUGE_USERNAME, DELUGE_PASSWORD)
-    client.connect()
-
-    torrents = client.call(
-        "core.get_torrents_status",
-        {},
-        [b"name", b"is_seed", b"save_path"],
-    )
+    try:
+        client, torrents = connect_and_get_torrents()
+    except Exception as e:
+        # Leave it for the next scheduled run (every 15m) rather than
+        # crash-looping the pod on a transient Deluge slowdown/timeout.
+        print(f"Couldn't reach Deluge after retries, skipping this run: {e}")
+        sys.exit(0)
 
     removed = []
     for torrent_id, status in torrents.items():
@@ -74,8 +102,11 @@ data:
         name_norm = norm(name)
         if not any(title and title in name_norm for title in imported_titles):
             continue
-        client.call("core.remove_torrent", [torrent_id, True])
-        removed.append(name)
+        try:
+            client.call("core.remove_torrent", [torrent_id, True])
+            removed.append(name)
+        except Exception as e:
+            print(f"Couldn't remove {name!r}, will retry next run: {e}")
 
     if removed:
         print(f"Removed {len(removed)} already-imported torrent(s) and their local data:")
@@ -91,6 +122,7 @@ metadata:
   namespace: apps
 spec:
   schedule: "*/15 * * * *" # every 15 minutes
+  concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
@@ -117,6 +149,13 @@ spec:
                 secretKeyRef:
                   name: arr-api-keys
                   key: RADARR_API_KEY
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
             volumeMounts:
             - name: script
               mountPath: /scripts
