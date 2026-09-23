@@ -103,7 +103,7 @@ data:
         if not any(title and title in name_norm for title in imported_titles):
             continue
         try:
-            client.call("core.remove_torrent", [torrent_id, True])
+            client.call("core.remove_torrent", torrent_id, True)
             removed.append(name)
         except Exception as e:
             print(f"Couldn't remove {name!r}, will retry next run: {e}")
