@@ -41,7 +41,7 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: poller
-          image: ghcr.io/ehulle117/tars-adsb-tools:latest
+          image: ghcr.io/ehulle117/tars-adsb-tools:main
           command: ["python3", "run.py"]
           workingDir: /app
           volumeMounts:
@@ -105,7 +105,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: map
-          image: ghcr.io/ehulle117/tars-adsb-tools:latest
+          image: ghcr.io/ehulle117/tars-adsb-tools:main
           command: ["python3", "map_server.py", "/app/state.json", "8766"]
           workingDir: /app
           ports:
@@ -164,7 +164,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: coverage
-          image: ghcr.io/ehulle117/tars-adsb-tools:latest
+          image: ghcr.io/ehulle117/tars-adsb-tools:main
           command: ["python3", "coverage_server.py", "/app/adsb_tools.db", "8767"]
           workingDir: /app
           ports:
