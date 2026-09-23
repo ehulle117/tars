@@ -1,0 +1,187 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Live Aircraft Map</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0b0d12; }
+  #map { position: absolute; top: 40px; bottom: 0; left: 0; right: 0; }
+  #bar { height: 40px; display: flex; align-items: center; padding: 0 12px; color: #cfd8e3; font-size: 13px; background: #0b0d12; }
+  .plane-wrap { display: flex; flex-direction: column; align-items: center; pointer-events: none; }
+  .plane-icon { font-size: 18px; text-shadow: 0 0 3px #000; }
+  .plane-label { font-size: 10px; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap; margin-top: -2px; }
+  .leaflet-popup-content { font-size: 13px; line-height: 1.5; }
+  #closest-panel {
+    position: absolute; top: 52px; right: 12px; z-index: 1000;
+    background: rgba(11,13,18,0.9); color: #cfd8e3; font-size: 12px;
+    border-radius: 6px; padding: 8px 10px; width: 200px;
+  }
+  #closest-panel h3 { margin: 0 0 6px; font-size: 12px; color: #8fa3c0; font-weight: 600; }
+  #closest-panel ol { margin: 0; padding-left: 18px; }
+  #closest-panel li { margin-bottom: 2px; }
+</style>
+</head>
+<body>
+  <div id="bar">Live Aircraft Map — <span id="count">0</span> aircraft tracked</div>
+  <div id="map"></div>
+  <div id="closest-panel">
+    <h3>Closest Approaches</h3>
+    <ol id="closest-list"></ol>
+  </div>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let map, markers = {}, receiverPos = null;
+const urlParams = new URLSearchParams(location.search);
+const focusHex = urlParams.get('hex');
+const focusLat = urlParams.get('lat');
+const focusLon = urlParams.get('lon');
+let focusedLive = false;  // true once we've centered on a live match for focusHex
+
+function initMap(lat, lon) {
+  map = L.map('map').setView([lat, lon], 8);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  L.marker([lat, lon]).addTo(map).bindPopup('Receiver');
+  receiverPos = [lat, lon];
+
+  // A linked aircraft may already be gone from the live feed by the time
+  // someone clicks (this was the actual bug - waiting for a live match that
+  // may never come, for any aircraft, not just fast movers). If the link
+  // carried the alert-time position, center there immediately instead of
+  // waiting - upgraded to the live marker/popup below if it does show up.
+  if (focusHex && focusLat && focusLon) {
+    map.setView([+focusLat, +focusLon], 11);
+    L.popup({ maxWidth: 280 }).setLatLng([+focusLat, +focusLon])
+      .setContent(`<b>Alert location</b><br>Hex: ${focusHex}<br><span style="color:#888;font-size:11px;">Position at alert time - may no longer be in range</span>`)
+      .openOn(map);
+  }
+}
+
+function planeIcon(track, label) {
+  return L.divIcon({
+    html: `<div class="plane-wrap">
+             <div class="plane-icon" style="transform: rotate(${track || 0}deg)">&#9992;</div>
+             <div class="plane-label">${label}</div>
+           </div>`,
+    className: '', iconSize: [60, 34], iconAnchor: [30, 12],
+  });
+}
+
+// Haversine distance in km, for a quick "range from receiver" in the popup.
+function distanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function photoBlockHtml(photo) {
+  if (!photo || !photo.url) return '';
+  const caption = photo.source === 'real' ? 'actual aircraft' : 'stock photo, type match';
+  return `<img src="${photo.url}" style="width:100%;max-width:260px;border-radius:4px;margin-bottom:6px;">
+          <div style="font-size:10px;color:#888;margin-bottom:4px;">${caption}${photo.credit ? ' — ' + photo.credit : ''}</div>`;
+}
+
+function routeRows(route) {
+  const rows = [];
+  if (route) {
+    if (route.type) rows.push(['Type', route.type]);
+    if (route.registration) rows.push(['Registration', route.registration]);
+    if (route.manufacturer) rows.push(['Manufacturer', route.manufacturer]);
+  }
+  return rows;
+}
+
+function popupContent(a) {
+  const rows = [
+    ['Callsign', (a.flight || '').trim() || '—'],
+    ['Hex', a.hex],
+    ...routeRows(a.route),
+    ['Altitude', a.alt_baro != null ? `${a.alt_baro} ft` : '—'],
+    ['Ground speed', a.gs != null ? `${a.gs} kt` : '—'],
+    ['Heading', a.track != null ? `${Math.round(a.track)}°` : '—'],
+    ['Vert. rate', (a.vert_rate ?? a.baro_rate) != null ? `${a.vert_rate ?? a.baro_rate} ft/min` : '—'],
+    ['Squawk', a.squawk || '—'],
+    ['Category', a.category || '—'],
+  ];
+  if (receiverPos && a.lat != null && a.lon != null) {
+    rows.push(['Range', `${distanceKm(receiverPos[0], receiverPos[1], a.lat, a.lon).toFixed(1)} km`]);
+  }
+  rows.push(['Signal', a.rssi != null ? `${a.rssi} dBFS` : '—']);
+  const title = (a.flight || '').trim() || a.hex;
+  return `${photoBlockHtml(a.photo)}<b>${title}</b><br>` + rows.map(([k, v]) => `${k}: ${v}`).join('<br>');
+}
+
+function closestPopupContent(entry) {
+  const rows = [
+    ['Callsign', entry.flight],
+    ['Hex', entry.hex],
+    ...routeRows(entry.route),
+    ['Closest approach', `${entry.range_km.toFixed(2)} km`],
+    ['Altitude then', entry.alt_baro != null ? `${entry.alt_baro} ft` : '—'],
+    ['When', entry.seen_at ? new Date(entry.seen_at * 1000).toLocaleString() : '—'],
+  ];
+  return `${photoBlockHtml(entry.photo)}<b>${entry.flight}</b><br>` + rows.map(([k, v]) => `${k}: ${v}`).join('<br>');
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/aircraft.json');
+    const data = await res.json();
+    if (!map && data.receiver) initMap(data.receiver.lat, data.receiver.lon);
+    if (!map) { setTimeout(poll, 2000); return; }
+
+    const seen = new Set();
+    for (const a of data.aircraft) {
+      if (a.lat == null || a.lon == null) continue;
+      seen.add(a.hex);
+      const label = (a.flight || '').trim() || a.hex;
+      if (markers[a.hex]) {
+        markers[a.hex].setLatLng([a.lat, a.lon]);
+        markers[a.hex].setIcon(planeIcon(a.track, label));
+      } else {
+        markers[a.hex] = L.marker([a.lat, a.lon], { icon: planeIcon(a.track, label) }).addTo(map);
+      }
+      markers[a.hex].bindPopup(popupContent(a));
+
+      if (focusHex && !focusedLive && a.hex.toLowerCase() === focusHex.toLowerCase()) {
+        focusedLive = true;
+        map.flyTo([a.lat, a.lon], 11);
+        markers[a.hex].openPopup();
+      }
+    }
+    for (const hex of Object.keys(markers)) {
+      if (!seen.has(hex)) { map.removeLayer(markers[hex]); delete markers[hex]; }
+    }
+    document.getElementById('count').textContent = seen.size;
+  } catch (e) { /* keep trying */ }
+  setTimeout(poll, 2000);
+}
+
+async function pollClosest() {
+  try {
+    const res = await fetch('/closest.json');
+    const data = await res.json();
+    const list = document.getElementById('closest-list');
+    list.innerHTML = data.leaderboard.map((r, i) =>
+      `<li style="cursor:pointer;text-decoration:underline dotted;" data-i="${i}">${r.flight} — ${r.range_km.toFixed(2)} km (${r.alt_baro ?? '?'} ft)</li>`
+    ).join('');
+    list.querySelectorAll('li').forEach(li => {
+      li.onclick = () => {
+        const entry = data.leaderboard[+li.dataset.i];
+        if (!map || entry.lat == null || entry.lon == null) return;
+        map.flyTo([entry.lat, entry.lon], 10);
+        L.popup({ maxWidth: 280 }).setLatLng([entry.lat, entry.lon]).setContent(closestPopupContent(entry)).openOn(map);
+      };
+    });
+  } catch (e) { /* keep trying */ }
+  setTimeout(pollClosest, 15000);
+}
+
+poll();
+pollClosest();
+</script>
+</body>
+</html>

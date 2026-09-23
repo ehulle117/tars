@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Reception Coverage Map</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0b0d12; }
+  #map { position: absolute; top: 40px; bottom: 0; left: 0; right: 340px; }
+  #bar { height: 40px; display: flex; align-items: center; padding: 0 12px; color: #cfd8e3; font-size: 13px; background: #0b0d12; }
+  #polar-panel {
+    position: absolute; top: 40px; bottom: 0; right: 0; width: 340px;
+    background: #11141c; color: #cfd8e3; padding: 12px; box-sizing: border-box;
+  }
+  #polar-panel h3 { margin: 0 0 8px; font-size: 13px; color: #8fa3c0; font-weight: 600; }
+  #polar-panel svg { width: 100%; height: auto; }
+</style>
+</head>
+<body>
+  <div id="bar">Reception Coverage — <span id="count">0</span> positions logged, max range <span id="maxrange">?</span> km</div>
+  <div id="map"></div>
+  <div id="polar-panel">
+    <h3>Directional Range (max km per 16 compass sectors)</h3>
+    <svg id="polar" viewBox="0 0 300 300"></svg>
+  </div>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const N_SECTORS = 16;
+
+function drawPolar(points, maxRange) {
+  // Bucket max range per compass sector, then draw as a filled radar polygon
+  // with range rings - a quick visual for "which direction sees furthest".
+  const sectorMax = new Array(N_SECTORS).fill(0);
+  for (const p of points) {
+    const idx = Math.floor(((p.bearing + (360 / N_SECTORS) / 2) % 360) / (360 / N_SECTORS));
+    sectorMax[idx] = Math.max(sectorMax[idx], p.range_km);
+  }
+
+  const cx = 150, cy = 150, R = 120;
+  const scale = R / maxRange;
+  const toXY = (bearingDeg, r) => {
+    const rad = (bearingDeg - 90) * Math.PI / 180; // 0deg (N) at top
+    return [cx + r * scale * Math.cos(rad), cy + r * scale * Math.sin(rad)];
+  };
+
+  let svg = '';
+  // range rings + labels at 25/50/75/100% of maxRange
+  for (const frac of [0.25, 0.5, 0.75, 1.0]) {
+    svg += `<circle cx="${cx}" cy="${cy}" r="${R * frac}" fill="none" stroke="#2a3040" stroke-width="1"/>`;
+    svg += `<text x="${cx + 3}" y="${cy - R * frac + 10}" font-size="9" fill="#5c6b82">${(maxRange * frac).toFixed(0)}km</text>`;
+  }
+  // compass spokes + labels
+  const compass = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  compass.forEach((label, i) => {
+    const deg = i * 45;
+    const [x, y] = toXY(deg, maxRange * 1.08);
+    const [x0, y0] = toXY(deg, 0);
+    svg += `<line x1="${x0}" y1="${y0}" x2="${toXY(deg, maxRange)[0]}" y2="${toXY(deg, maxRange)[1]}" stroke="#1c212b" stroke-width="1"/>`;
+    svg += `<text x="${x}" y="${y}" font-size="11" fill="#8fa3c0" text-anchor="middle">${label}</text>`;
+  });
+
+  // the actual coverage polygon
+  const poly = sectorMax.map((r, i) => toXY(i * (360 / N_SECTORS), r));
+  const pathD = poly.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt[0].toFixed(1)},${pt[1].toFixed(1)}`).join(' ') + ' Z';
+  svg += `<path d="${pathD}" fill="rgba(80,160,255,0.25)" stroke="#50a0ff" stroke-width="2"/>`;
+  poly.forEach(([x, y]) => { svg += `<circle cx="${x}" cy="${y}" r="2.5" fill="#50a0ff"/>`; });
+
+  // receiver at center
+  svg += `<circle cx="${cx}" cy="${cy}" r="4" fill="#ff5050"/>`;
+
+  document.getElementById('polar').innerHTML = svg;
+}
+
+async function load() {
+  const res = await fetch('/coverage.json');
+  const data = await res.json();
+  const points = data.points;
+  if (!points.length) return;
+
+  const center = data.receiver || points[0];
+  const map = L.map('map').setView([center.lat, center.lon], 7);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  const maxRange = Math.max(...points.map(p => p.range_km));
+  document.getElementById('count').textContent = points.length;
+  document.getElementById('maxrange').textContent = maxRange.toFixed(0);
+
+  for (const p of points) {
+    const t = Math.min(1, p.range_km / maxRange);
+    const color = `hsl(${(1 - t) * 200}, 80%, 55%)`; // blue (near) -> red (far)
+    L.circleMarker([p.lat, p.lon], { radius: 2, color, weight: 0, fillOpacity: 0.6 }).addTo(map);
+  }
+
+  drawPolar(points, maxRange);
+}
+load();
+</script>
+</body>
+</html>

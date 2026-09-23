@@ -1,0 +1,193 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: adsb-tools-data-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adsb-tools-poller
+  namespace: apps
+  labels:
+    app: adsb-tools-poller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adsb-tools-poller
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: adsb-tools-poller
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-pi
+      tolerations:
+        - key: arch
+          operator: Equal
+          value: arm64
+          effect: NoSchedule
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: poller
+          image: ghcr.io/ehulle117/tars-adsb-tools:latest
+          command: ["python3", "run.py"]
+          workingDir: /app
+          volumeMounts:
+            - name: data
+              mountPath: /app/state.json
+              subPath: state.json
+            - name: data
+              mountPath: /app/adsb_tools.db
+              subPath: adsb_tools.db
+            - name: data
+              mountPath: /app/photo_cache.json
+              subPath: photo_cache.json
+            - name: discord-token
+              mountPath: /root/.config/adsb-tools/discord_bot_token
+              subPath: discord_bot_token
+            - name: receiver-location
+              mountPath: /root/.config/adsb-tools/receiver_location.json
+              subPath: receiver_location.json
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: adsb-tools-data-pvc
+        - name: discord-token
+          secret:
+            secretName: adsb-tools-discord
+            items:
+              - key: bot_token
+                path: discord_bot_token
+        - name: receiver-location
+          secret:
+            secretName: adsb-tools-location
+            items:
+              - key: receiver_location.json
+                path: receiver_location.json
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adsb-tools-map
+  namespace: apps
+  labels:
+    app: adsb-tools-map
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adsb-tools-map
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: adsb-tools-map
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-pi
+      tolerations:
+        - key: arch
+          operator: Equal
+          value: arm64
+          effect: NoSchedule
+      containers:
+        - name: map
+          image: ghcr.io/ehulle117/tars-adsb-tools:latest
+          command: ["python3", "map_server.py", "/app/state.json", "8766"]
+          workingDir: /app
+          ports:
+            - containerPort: 8766
+          volumeMounts:
+            - name: data
+              mountPath: /app/state.json
+              subPath: state.json
+            - name: data
+              mountPath: /app/photo_cache.json
+              subPath: photo_cache.json
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: adsb-tools-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adsb-tools-map-svc
+  namespace: apps
+spec:
+  type: LoadBalancer
+  selector:
+    app: adsb-tools-map
+  ports:
+    - protocol: TCP
+      port: 8766
+      targetPort: 8766
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adsb-tools-coverage
+  namespace: apps
+  labels:
+    app: adsb-tools-coverage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adsb-tools-coverage
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: adsb-tools-coverage
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker-pi
+      tolerations:
+        - key: arch
+          operator: Equal
+          value: arm64
+          effect: NoSchedule
+      containers:
+        - name: coverage
+          image: ghcr.io/ehulle117/tars-adsb-tools:latest
+          command: ["python3", "coverage_server.py", "/app/adsb_tools.db", "8767"]
+          workingDir: /app
+          ports:
+            - containerPort: 8767
+          volumeMounts:
+            - name: data
+              mountPath: /app/adsb_tools.db
+              subPath: adsb_tools.db
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: adsb-tools-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adsb-tools-coverage-svc
+  namespace: apps
+spec:
+  type: LoadBalancer
+  selector:
+    app: adsb-tools-coverage
+  ports:
+    - protocol: TCP
+      port: 8767
+      targetPort: 8767
