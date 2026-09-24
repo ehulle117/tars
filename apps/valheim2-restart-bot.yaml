@@ -1,20 +1,56 @@
-# Lets Etan @-mention the Tars bot to restart Ashlands Ascendant (the
-# native Docker Valheim server on `case`, see apps/valheim.yaml's git
-# history for context) remotely -- e.g. from a phone, when the
-# "Game server connected failed" stuck state recurs and nobody's home to
-# SSH in. The valheim2-watchdog CronJob-equivalent user script on `case`
-# already auto-restarts on a schedule; this is the on-demand version for
-# when that's too slow or someone just wants to force it.
+# Lets Etan @-mention the Tars bot to restart Ashlands Ascendant remotely
+# -- e.g. from a phone, when the "Game server connected failed" stuck state
+# recurs and nobody's home to fix it.
+#
+# 2026-09-24: valheim2 moved back to k3s (see apps/valheim2.yaml's history
+# and the daily notes for why -- a Docker embedded-DNS bug specific to the
+# native setup on `case`). This bot moved with it: restarts now go through
+# `kubectl rollout restart` against the in-cluster API using this pod's own
+# ServiceAccount, instead of SSHing into `case` and running `docker
+# restart`. Simpler than the SSH path it replaces, not more complex --
+# no key material to manage, just a narrowly-scoped Role.
 #
 # Reuses the existing Tars bot token (discord-alerts/bot_token, same one
-# router-check/tars-alert-triage post with) and the case-ssh-key Secret
-# (same one case-health-check.yaml already uses to SSH into `case`) --
-# no new bot application, no new keys.
+# router-check/tars-alert-triage post with) -- no new bot application, no
+# new keys.
 #
 # Restricted to ALLOWED_USER_IDS (comma-separated Discord user IDs) --
 # anyone else who @-mentions the bot gets told no. Only fires on
 # "@Tars restart valheim" (case/whitespace-insensitive) so a plain
 # @mention in conversation doesn't trigger a restart by accident.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: valheim2-restart-bot
+  namespace: apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: valheim2-restart-bot
+  namespace: apps
+rules:
+  # Scoped to just the valheim2 Deployment -- enough to read its status and
+  # trigger a rollout restart, nothing else.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["valheim2"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: valheim2-restart-bot
+  namespace: apps
+subjects:
+  - kind: ServiceAccount
+    name: valheim2-restart-bot
+    namespace: apps
+roleRef:
+  kind: Role
+  name: valheim2-restart-bot
+  apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -37,16 +73,8 @@ data:
     ALLOWED_USER_IDS = {
         int(uid) for uid in os.environ["ALLOWED_USER_IDS"].split(",") if uid.strip()
     }
-    CASE_HOST = os.environ.get("CASE_HOST", "192.168.8.152")
-    CONTAINER_NAME = os.environ.get("CONTAINER_NAME", "ashlands-ascendant")
-    SSH_KEY_PATH = "/ssh/id_ed25519"
+    DEPLOYMENT_NAME = os.environ.get("DEPLOYMENT_NAME", "valheim2")
     COMMAND_PHRASE = "restart valheim"
-
-    SSH_BASE = [
-        "ssh", "-i", SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
-        "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
-        f"root@{CASE_HOST}",
-    ]
 
     intents = discord.Intents.default()
     client = discord.Client(intents=intents)
@@ -84,25 +112,25 @@ data:
         if COMMAND_PHRASE not in command:
             log.info("rejected: stripped content %r does not contain %r", command, COMMAND_PHRASE)
             await message.reply(
-                f'Mention me with "restart valheim" to restart `{CONTAINER_NAME}`.'
+                f'Mention me with "restart valheim" to restart `{DEPLOYMENT_NAME}`.'
             )
             return
 
         log.info("authorized restart request from %s", message.author.id)
 
-        await message.reply(f"Restarting `{CONTAINER_NAME}` on case...")
+        await message.reply(f"Restarting `{DEPLOYMENT_NAME}`...")
         try:
             result = subprocess.run(
-                SSH_BASE + [f"docker restart {CONTAINER_NAME}"],
+                ["kubectl", "rollout", "restart", f"deployment/{DEPLOYMENT_NAME}", "-n", "apps"],
                 capture_output=True, text=True, timeout=30,
             )
         except subprocess.TimeoutExpired:
-            await message.reply("SSH to case timed out.")
+            await message.reply("kubectl rollout restart timed out.")
             return
 
         if result.returncode == 0:
             await message.reply(
-                f"Restarted `{CONTAINER_NAME}`. Give it ~30-60s to come back up "
+                f"Restarted `{DEPLOYMENT_NAME}`. Give it ~30-60s to come back up "
                 "(Steam verify + world load)."
             )
         else:
@@ -131,6 +159,7 @@ spec:
       labels:
         app: valheim2-restart-bot
     spec:
+      serviceAccountName: valheim2-restart-bot
       containers:
         - name: bot
           image: python:3.12-alpine
@@ -138,7 +167,8 @@ spec:
             - sh
             - -c
             - |
-              apk add --no-cache openssh-client >/dev/null
+              set -e
+              apk add --no-cache kubectl
               pip install --quiet --no-cache-dir discord.py
               python /scripts/bot.py
           env:
@@ -149,10 +179,8 @@ spec:
                   key: bot_token
             - name: ALLOWED_USER_IDS
               value: "251566145092452352,472065214276304896,350408686025441280"
-            - name: CASE_HOST
-              value: "192.168.8.152"
-            - name: CONTAINER_NAME
-              value: "ashlands-ascendant"
+            - name: DEPLOYMENT_NAME
+              value: "valheim2"
           resources:
             requests:
               cpu: 20m
@@ -162,14 +190,7 @@ spec:
           volumeMounts:
             - name: script
               mountPath: /scripts
-            - name: ssh-key
-              mountPath: /ssh
-              readOnly: true
       volumes:
         - name: script
           configMap:
             name: valheim2-restart-bot-script
-        - name: ssh-key
-          secret:
-            secretName: case-ssh-key
-            defaultMode: 0400
