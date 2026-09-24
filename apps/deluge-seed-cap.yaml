@@ -30,6 +30,7 @@ data:
         [b"name", b"is_seed", b"paused", b"seeding_time"],
     )
 
+    to_pause = []
     paused = []
     for torrent_id, status in torrents.items():
         is_seed = status.get(b"is_seed")
@@ -38,8 +39,15 @@ data:
         if is_seed and not is_paused and seeding_time >= SEED_CAP_SECONDS:
             name = status.get(b"name", torrent_id).decode(errors="replace")
             days = seeding_time / 86400
-            client.call("core.pause_torrent", [torrent_id])
+            to_pause.append(torrent_id)
             paused.append(f"{name} (seeding {days:.0f}d)")
+
+    # Pause all in a single RPC call instead of one call per torrent: rapid
+    # back-to-back core.pause_torrent calls have previously corrupted Deluge's
+    # in-memory torrent handles (invalid torrent handle used [libtorrent:20]),
+    # hanging the web API for hours until the pod is restarted.
+    if to_pause:
+        client.call("core.pause_torrent", to_pause)
 
     if paused:
         print(f"Paused {len(paused)} torrent(s) past the {SEED_CAP_DAYS}-day seed cap:")
