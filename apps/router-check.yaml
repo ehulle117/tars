@@ -74,7 +74,7 @@ metadata:
   name: router-check
   namespace: apps
 spec:
-  schedule: "*/30 * * * *" # every 30 min
+  schedule: "12-59/30 * * * *" # every 30 min, offset to avoid a DNS burst at :00/:30
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:

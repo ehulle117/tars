@@ -133,7 +133,7 @@ metadata:
   name: deluge-local-cleanup
   namespace: apps
 spec:
-  schedule: "*/15 * * * *" # every 15 minutes
+  schedule: "14-59/15 * * * *" # every 15 minutes
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3

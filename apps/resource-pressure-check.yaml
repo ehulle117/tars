@@ -113,7 +113,7 @@ metadata:
   name: resource-pressure-check
   namespace: apps
 spec:
-  schedule: "*/30 * * * *"
+  schedule: "7-59/30 * * * *"
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:

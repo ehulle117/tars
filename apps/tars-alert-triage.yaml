@@ -103,7 +103,7 @@ metadata:
   name: tars-alert-triage
   namespace: apps
 spec:
-  schedule: "*/15 * * * *"
+  schedule: "13-59/15 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3

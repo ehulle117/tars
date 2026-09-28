@@ -142,7 +142,7 @@ metadata:
   name: pod-health-check
   namespace: apps
 spec:
-  schedule: "*/15 * * * *"
+  schedule: "4-59/15 * * * *"
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:

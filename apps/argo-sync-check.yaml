@@ -58,7 +58,7 @@ metadata:
   name: argo-sync-check
   namespace: apps
 spec:
-  schedule: "*/15 * * * *"
+  schedule: "9-59/15 * * * *"
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:

@@ -69,7 +69,7 @@ metadata:
   name: case-health-check
   namespace: apps
 spec:
-  schedule: "*/30 * * * *"
+  schedule: "2-59/30 * * * *"
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
