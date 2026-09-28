@@ -21,7 +21,7 @@ data:
     SEED_CAP_DAYS = int(os.environ.get("SEED_CAP_DAYS", "30"))
     SEED_CAP_SECONDS = SEED_CAP_DAYS * 86400
 
-    client = DelugeRPCClient(HOST, PORT, USERNAME, PASSWORD)
+    client = DelugeRPCClient(HOST, PORT, USERNAME, PASSWORD, timeout=60)
     client.connect()
 
     torrents = client.call(
@@ -68,6 +68,7 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 600
       template:
         spec:
           containers:

@@ -91,7 +91,7 @@ data:
         print(f"Couldn't reach Deluge after retries, skipping this run: {e}")
         sys.exit(0)
 
-    removed = []
+    to_remove = {}
     for torrent_id, status in torrents.items():
         if not status.get(b"is_seed"):
             continue
@@ -102,11 +102,23 @@ data:
         name_norm = norm(name)
         if not any(title and title in name_norm for title in imported_titles):
             continue
+        to_remove[torrent_id.decode()] = name
+
+    # Remove all in a single core.remove_torrents call instead of one
+    # core.remove_torrent per torrent: rapid back-to-back mutations have
+    # corrupted Deluge's in-memory torrent handles (invalid torrent handle
+    # used [libtorrent:20]), hanging every status call until a pod restart.
+    removed = []
+    if to_remove:
         try:
-            client.call("core.remove_torrent", torrent_id, True)
-            removed.append(name)
+            errors = client.call("core.remove_torrents", list(to_remove), True)
+            errors = [(tid.decode(), err.decode(errors="replace")) for tid, err in errors]
+            failed = {tid for tid, _ in errors}
+            for tid, err in errors:
+                print(f"Couldn't remove {to_remove.get(tid, tid)!r}, will retry next run: {err}")
+            removed = [name for tid, name in to_remove.items() if tid not in failed]
         except Exception as e:
-            print(f"Couldn't remove {name!r}, will retry next run: {e}")
+            print(f"Couldn't remove {len(to_remove)} torrent(s), will retry next run: {e}")
 
     if removed:
         print(f"Removed {len(removed)} already-imported torrent(s) and their local data:")

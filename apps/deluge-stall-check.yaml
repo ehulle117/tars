@@ -28,7 +28,7 @@ data:
     REMOVE_STALL_HOURS = int(os.environ.get("REMOVE_STALL_HOURS", "72"))
     REMOVE_STALL_MINUTES = REMOVE_STALL_HOURS * 60
 
-    client = DelugeRPCClient(HOST, PORT, USERNAME, PASSWORD)
+    client = DelugeRPCClient(HOST, PORT, USERNAME, PASSWORD, timeout=60)
     client.connect()
 
     torrents = client.call(
@@ -40,6 +40,7 @@ data:
     now = datetime.now(timezone.utc).timestamp()
     findings = []
     removed = []
+    to_remove = []
 
     for torrent_id, status in torrents.items():
         name = status.get(b"name", torrent_id).decode(errors="replace")
@@ -54,7 +55,7 @@ data:
         )
 
         if is_dead_stall and age_min >= REMOVE_STALL_MINUTES:
-            client.call("core.remove_torrent", torrent_id, True)
+            to_remove.append(torrent_id)
             removed.append(f"{name}: removed after {age_min / 60:.0f}h stalled at {status.get(b'progress', 0):.0f}%")
             continue
 
@@ -63,6 +64,12 @@ data:
             findings.append(f"{name}: Error state ({tracker or 'no tracker message'})")
         elif is_dead_stall:
             findings.append(f"{name}: stalled at {status.get(b'progress', 0):.0f}%, 0 B/s for {age_min:.0f}m+")
+
+    # One core.remove_torrents call, not one core.remove_torrent per torrent -
+    # see the matching comment in deluge-local-cleanup.
+    if to_remove:
+        for tid, err in client.call("core.remove_torrents", to_remove, True):
+            findings.append(f"{tid.decode()}: auto-remove failed ({err.decode(errors='replace')})")
 
     if removed:
         print(f"Removed {len(removed)} torrent(s) stalled {REMOVE_STALL_HOURS}h+:")
@@ -97,8 +104,10 @@ spec:
   schedule: "0 */2 * * *" # every 2 hours
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 600
       template:
         spec:
           containers:
