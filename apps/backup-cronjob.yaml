@@ -27,7 +27,10 @@ spec:
                     echo "Starting backup of k3s local-path storage on tars..."
                     DATE=$(date +%Y-%m-%d_%H-%M-%S)
                     mkdir -p /destination/tars_k8s_appdata
-                    tar -czf /destination/tars_k8s_appdata/backup_${DATE}.tar.gz -C /source .
+                    # Skip Deluge's downloads volume: it's transient, already-compressed media
+                    # (~190G) that made every nightly backup 120-370G and filled Case.
+                    tar -czf /destination/tars_k8s_appdata/backup_${DATE}.tar.gz \
+                      --exclude="./pvc-*_apps_deluge-downloads-pvc" -C /source .
                     echo "Backup completed successfully: backup_${DATE}.tar.gz"
                     echo "Cleaning up backups older than 7 days..."
                     find /destination/tars_k8s_appdata -name "backup_*.tar.gz" -mtime +7 -delete
