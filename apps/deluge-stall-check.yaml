@@ -101,7 +101,7 @@ metadata:
   name: deluge-stall-check
   namespace: apps
 spec:
-  schedule: "5 */2 * * *" # every 2 hours
+  schedule: "41 1-23/2 * * *" # every 2 hours (odd UTC hours, :41)
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   concurrencyPolicy: Forbid

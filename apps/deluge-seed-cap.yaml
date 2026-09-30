@@ -62,7 +62,10 @@ metadata:
   name: deluge-seed-cap
   namespace: apps
 spec:
-  schedule: "30 4 * * *" # 4:30 AM daily
+  # Hourly (idempotent, ~8s): Argo marks the app Degraded while a CronJob's most
+  # recent scheduled run has failed, so a once-a-day job left it red for 24h after
+  # any Deluge hiccup. Hourly heals within the hour.
+  schedule: "36 * * * *"
   timeZone: "America/New_York"
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
