@@ -103,13 +103,25 @@ spec:
             # the only way to actually detect a dead tunnel and get k8s to
             # restart the pod instead of leaving every torrent stalled
             # (tars#87).
+            #
+            # Also catches Deluge's other failure mode: the daemon keeps
+            # running but every torrent-status RPC hangs forever ("invalid
+            # torrent handle used [libtorrent:20]" in the log), which fails
+            # every deluge-* CronJob until someone restarts the pod. `info`
+            # goes through the same get_torrents_status path that hangs. Only
+            # a timeout (exit 124) counts as wedged; a refused connection
+            # (still starting up) must not, or startup would restart-loop.
             exec:
               command:
                 - sh
                 - -c
-                - ip addr show tun0 | grep -q "inet "
+                - |
+                  ip addr show tun0 | grep -q "inet " || exit 1
+                  timeout 30 deluge-console -c /config info >/dev/null 2>&1
+                  [ $? -ne 124 ]
             initialDelaySeconds: 60
-            periodSeconds: 60
+            periodSeconds: 120
+            timeoutSeconds: 45
             failureThreshold: 3
       volumes:
         - name: config
