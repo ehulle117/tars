@@ -133,6 +133,10 @@ metadata:
   name: deluge-local-cleanup
   namespace: apps
 spec:
+  # SUSPENDED 2026-09-30 as an experiment: 5 of 6 Deluge wedges ("invalid torrent
+  # handle") began 13-18s after a run of this job started. If the wedges stop,
+  # this job is the trigger; if they continue, un-suspend it.
+  suspend: true
   schedule: "14-59/15 * * * *" # every 15 minutes
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
