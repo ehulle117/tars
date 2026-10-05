@@ -95,10 +95,13 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      # No retries: a retry would just restart FlareSolverr again and, on
+      # failure, queue a duplicate alert.
+      backoffLimit: 0
       template:
         spec:
           serviceAccountName: flaresolverr-restart
-          restartPolicy: OnFailure
+          restartPolicy: Never
           containers:
             - name: restart
               image: python:3.12-alpine
@@ -106,6 +109,25 @@ spec:
                 - sh
                 - -c
                 - |
-                  apk add --no-cache kubectl >/dev/null &&
-                  kubectl rollout restart deployment/flaresolverr -n apps &&
-                  kubectl rollout status deployment/flaresolverr -n apps --timeout=120s
+                  run() {
+                    set -e
+                    apk add --no-cache kubectl >/dev/null
+                    kubectl rollout restart deployment/flaresolverr -n apps
+                    kubectl rollout status deployment/flaresolverr -n apps --timeout=120s
+                  }
+                  # On failure, drop a note in the triage queue (drained by
+                  # pod-health-check -> Claude triage -> Discord), same as
+                  # the backup jobs.
+                  if ! run; then
+                    mkdir -p /queue/.tars-triage-queue
+                    echo "flaresolverr-restart failed at $(date -Iseconds). Check: kubectl logs -n apps pod/$HOSTNAME" \
+                      > "/queue/.tars-triage-queue/flaresolverr-restart-$(date +%Y%m%d%H%M%S).txt"
+                    exit 1
+                  fi
+              volumeMounts:
+                - name: triage-queue
+                  mountPath: /queue
+          volumes:
+            - name: triage-queue
+              persistentVolumeClaim:
+                claimName: nfs-media-pvc
