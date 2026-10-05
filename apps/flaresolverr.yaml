@@ -64,7 +64,8 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     resourceNames: ["flaresolverr"]
-    verbs: ["get", "patch"]
+    # list/watch (name-scoped) are needed by `kubectl rollout status`.
+    verbs: ["get", "list", "watch", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
