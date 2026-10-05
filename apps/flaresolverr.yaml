@@ -43,3 +43,68 @@ spec:
     - protocol: TCP
       port: 8191
       targetPort: 8191
+---
+# Nightly restart: FlareSolverr's Chromium gets stuck after days of uptime
+# and challenge solves start timing out at 120s (seen 2026-10-05 after 14d
+# up; kickass/Uindex/BT.etree indexers dropped out of Prowlarr until a manual
+# restart). Same in-cluster `kubectl rollout restart` pattern as
+# valheim2-restart-bot, scoped to just this Deployment.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flaresolverr-restart
+  namespace: apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flaresolverr-restart
+  namespace: apps
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["flaresolverr"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flaresolverr-restart
+  namespace: apps
+subjects:
+  - kind: ServiceAccount
+    name: flaresolverr-restart
+    namespace: apps
+roleRef:
+  kind: Role
+  name: flaresolverr-restart
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: flaresolverr-restart
+  namespace: apps
+spec:
+  # 04:30 local - after the ~23:00 appdata backups, before the 08:00 arr-queue-check.
+  schedule: "30 4 * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: flaresolverr-restart
+          restartPolicy: OnFailure
+          containers:
+            - name: restart
+              image: python:3.12-alpine
+              command:
+                - sh
+                - -c
+                - |
+                  apk add --no-cache kubectl >/dev/null &&
+                  kubectl rollout restart deployment/flaresolverr -n apps &&
+                  kubectl rollout status deployment/flaresolverr -n apps --timeout=120s
