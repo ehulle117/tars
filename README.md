@@ -99,6 +99,10 @@ Every detector is symmetric: find a problem or don't, and if so, write
 - `arr-queue-check` (daily 8 AM): stuck *arr imports, long-failing
   Prowlarr indexers.
 - `deluge-stall-check` (2h): torrents in `Error` state or stalled at 0 B/s.
+- `library-leftover-check` (daily 7:30 AM): scene/torrent-named entries at the
+  root of the movies/tv/music/ebooks libraries on Case, and `.exe`/`.scr`-style
+  files anywhere in them. Tripwire for Deluge's move-completed paths leaking
+  into the libraries and for fake releases imported by the *arr apps.
 - `router-check` (30 min): WAN down, via SSH + `ubus` on the GL.iNet router
   (`router-ssh-key` Secret).
 - `case-health-check` (30 min): Unraid array state (`mdcmd status`) and

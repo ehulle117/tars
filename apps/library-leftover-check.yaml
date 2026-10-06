@@ -1,0 +1,136 @@
+# Detector: scene/torrent-named leftovers and executables in the media
+# libraries on Case.
+#
+# Why: until 2026-09-20 Deluge's per-label "move completed" paths
+# (/downloads/media/{movies,tv,music,ebooks}) pointed at the NFS share, so
+# every finished torrent landed in the Plex libraries under its scene name
+# (junk Plex titles, ~740G of duplicates). Fake .exe/.scr "episodes" also got
+# imported by Sonarr. Both are fixed at the source (Deluge now downloads to
+# local storage, and a custom format blocks executable releases) - this job
+# is the tripwire if either comes back.
+#
+# Read-only on the libraries; like the other detectors it only writes a note
+# into <queue>/.tars-triage-queue/ for tars-alert-triage to pick up.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: library-leftover-check-script
+  namespace: apps
+data:
+  check.py: |
+    import os
+    import re
+    import sys
+    from datetime import datetime
+
+    LIB = "/queue/media"  # nfs-media-pvc root is /mnt/user/data on Case
+    ROOTS = ["movies", "tv", "music", "ebooks"]
+    MAX_LISTED = 15
+
+    # Names that only a torrent/scene release has.
+    SCENE = re.compile(
+        r"(www\.|uindex|torrenting|\b(2160p|1080p|720p|480p)\b|\bx26[45]\b|h\.?26[45]"
+        r"|web-?dl|webrip|blu-?ray|bdrip|remux|hdtv|\bS\d{2}E\d{2}\b|\[(flac|mp3|24-?bit|ps)\b|\bflac\b"
+        r"|\[\d{2}-\d{2,3}\]|\b\d{2}-?bit\b)",
+        re.I,
+    )
+    MOVIE_OK = re.compile(r" \(\d{4}\)$")  # Radarr: "Title (Year)"
+    BAD_EXT = {".exe", ".scr", ".bat", ".cmd", ".msi", ".lnk", ".vbs", ".jar", ".com"}
+
+
+    def leftover(root, name):
+        """True if a top-level library entry looks like a leftover download."""
+        if root == "movies":
+            return not MOVIE_OK.search(name)
+        return bool(SCENE.search(name))
+
+
+    def selftest():
+        assert leftover("movies", "Blade.Runner.2049.2017.PROPER.2160p-FGT")
+        assert leftover("movies", "www.UIndex.org    -    Rango.2011.1080p.BluRay.H264-RMX")
+        assert not leftover("movies", "Blade Runner 2049 (2017)")
+        assert leftover("tv", "Ted Lasso S04E07 Yes and Baby 1080p WEB-DL.mkv")
+        assert not leftover("tv", "Ted Lasso")
+        assert leftover("music", "Rush - Signals (Drummer's Edition) Flac")
+        assert leftover("music", "Pixies - 1988 - Surfer Rosa (2007 Remaster) [24-96]")
+        assert leftover("music", "Neil Young - 2026 - Second Song (24bit-192kHz)")
+        assert not leftover("music", "Rush")
+        assert not leftover("ebooks", "Daniel Abraham")
+        print("selftest ok")
+
+
+    if "--selftest" in sys.argv:
+        selftest()
+        sys.exit(0)
+
+    leftovers, executables = [], []
+    for root in ROOTS:
+        base = os.path.join(LIB, root)
+        if not os.path.isdir(base):
+            leftovers.append(f"{root}: library folder missing at {base} (mount problem?)")
+            continue
+        for entry in sorted(os.listdir(base)):
+            if leftover(root, entry):
+                leftovers.append(f"{root}/{entry}")
+        for dirpath, _dirs, files in os.walk(base):
+            for f in files:
+                if os.path.splitext(f)[1].lower() in BAD_EXT:
+                    executables.append(os.path.join(dirpath, f)[len(LIB) + 1:])
+
+    if not leftovers and not executables:
+        print("Libraries clean. Skipping.")
+        sys.exit(0)
+
+    lines = [f"Library check: {len(leftovers)} leftover download(s), {len(executables)} executable file(s) in the media libraries\n"]
+    if leftovers:
+        lines.append("Scene/torrent-named entries at a library root (Deluge move-completed leaking into the library?):")
+        lines += [f"  - {x}" for x in leftovers[:MAX_LISTED]]
+        if len(leftovers) > MAX_LISTED:
+            lines.append(f"  ... and {len(leftovers) - MAX_LISTED} more")
+        lines.append("")
+    if executables:
+        lines.append("Executable/script files (likely fake releases imported by an *arr app):")
+        lines += [f"  - {x}" for x in executables[:MAX_LISTED]]
+        if len(executables) > MAX_LISTED:
+            lines.append(f"  ... and {len(executables) - MAX_LISTED} more")
+    body = "\n".join(lines)
+
+    print(f"Found {len(leftovers) + len(executables)} issue(s), queuing for Claude triage.")
+    queue_dir = "/queue/.tars-triage-queue"
+    os.makedirs(queue_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    with open(f"{queue_dir}/library-leftover-check-{stamp}.txt", "w") as f:
+        f.write(body)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: library-leftover-check
+  namespace: apps
+spec:
+  schedule: "30 7 * * *" # 7:30 AM daily, just before arr-queue-check
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: library-leftover-check
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py"]
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: triage-queue
+              mountPath: /queue
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: library-leftover-check-script
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc
