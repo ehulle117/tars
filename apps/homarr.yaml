@@ -32,7 +32,16 @@ spec:
     spec:
       containers:
         - name: homarr
-          image: ghcr.io/homarr-labs/homarr:latest
+          # Pinned instead of :latest (tars#111). The running pod is still v1.77.x,
+          # which bundles next 16.3.0-preview.9 (vulnerable to GHSA-vcvr-r3jv-pc5j,
+          # fixed in next >= 16.3.6). Only v2.1.2+ bundles a patched next, and v2
+          # is a major release (rebuilt board editor: "Containers" replace
+          # "Groups"/dynamic sections) whose DB migration runs on first start.
+          # :latest already == v2.2.0 (same digest), so with imagePullPolicy
+          # Always any pod restart would have upgraded silently. Roll back by
+          # restoring /appdata/db/db.sqlite.pre-v2-upgrade-backup and re-pinning
+          # ghcr.io/homarr-labs/homarr:v1.77.2.
+          image: ghcr.io/homarr-labs/homarr:v2.2.0
           envFrom:
             - secretRef:
                 name: homarr-secrets
