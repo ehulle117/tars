@@ -95,7 +95,8 @@ Every detector is symmetric: find a problem or don't, and if so, write
   high-restart/stuck-Pending pods cluster-wide, via the read-only
   `cluster-health-checker` ClusterRole.
 - `resource-pressure-check` (30 min): node CPU/memory (metrics-server),
-  DiskPressure/MemoryPressure conditions, and Case's NFS export usage.
+  DiskPressure/MemoryPressure conditions, Case's NFS export usage, and
+  Tars's local disk (alert at 70% - Deluge's downloads live there).
 - `arr-queue-check` (daily 8 AM): stuck *arr imports, long-failing
   Prowlarr indexers.
 - `deluge-stall-check` (2h): torrents in `Error` state or stalled at 0 B/s.

@@ -24,6 +24,9 @@ data:
     CPU_PCT_THRESHOLD = 90
     MEM_PCT_THRESHOLD = 90
     CASE_DISK_PCT_THRESHOLD = 90
+    # Tars's root LV holds Deluge's local downloads/seeding (deluge-downloads-pvc).
+    # Alert well before kubelet's own DiskPressure eviction (~85% used).
+    TARS_DISK_PCT_THRESHOLD = 70
 
     ctx = ssl.create_default_context(cafile=CA_PATH)
 
@@ -92,6 +95,17 @@ data:
     except Exception as e:
         issues.append(f"couldn't check Case disk usage: {e}")
 
+    try:
+        total, used, free = shutil.disk_usage("/mnt/tars-storage")
+        pct = used / total * 100
+        if pct >= TARS_DISK_PCT_THRESHOLD:
+            issues.append(
+                f"Tars local disk: {pct:.0f}% used, {free / 1e9:.0f} GB free "
+                "(holds Deluge's downloads - check deluge-downloads-pvc / seeding torrents)"
+            )
+    except Exception as e:
+        issues.append(f"couldn't check Tars disk usage: {e}")
+
     if not issues:
         print("No resource pressure detected.")
     else:
@@ -122,6 +136,9 @@ spec:
         spec:
           serviceAccountName: cluster-health-checker
           restartPolicy: OnFailure
+          # Pinned to tars so the hostPath mount below is tars's own disk.
+          nodeSelector:
+            kubernetes.io/hostname: tars
           containers:
           - name: resource-pressure-check
             image: python:3.12-alpine
@@ -140,7 +157,14 @@ spec:
               readOnly: true
             - name: triage-queue
               mountPath: /queue
+            - name: tars-storage
+              mountPath: /mnt/tars-storage
+              readOnly: true
           volumes:
+          - name: tars-storage
+            hostPath:
+              path: /var/lib/rancher/k3s/storage
+              type: Directory
           - name: script
             configMap:
               name: resource-pressure-check-script
