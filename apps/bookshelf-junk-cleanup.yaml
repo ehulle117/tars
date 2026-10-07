@@ -1,0 +1,140 @@
+# Weekly cleanup: unmonitors obvious non-book junk that Bookshelf's author refresh
+# adds (comic issues, box sets, samplers/excerpts, study guides, coloring books,
+# foreign-language editions). Only touches monitored books with no file that were
+# added in the last 8 days, so a book you re-monitor by hand stays monitored.
+# Runs its selftest first; set DRY_RUN=1 on a manual job to preview.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bookshelf-junk-cleanup-script
+  namespace: apps
+data:
+  cleanup.py: |
+    import json
+    import os
+    import re
+    import sys
+    import urllib.request
+    from datetime import datetime, timedelta, timezone
+
+    HOST = "http://readarr-svc.apps.svc.cluster.local:8787/api/v1"
+    LOOKBACK_DAYS = 8  # weekly run + margin; older books are left alone so manual re-monitors stick
+    DRY_RUN = os.environ.get("DRY_RUN") == "1"
+
+    JUNK = {
+        "issue": r"#\s?\d|\bcvr\b|variant cover|\bissue\s+\d",
+        "set": r"\b\d+\s*-?\s*books?\b|books?\s+collection|collection set|box(ed)?\s+set|\bbooks?\s+\d+\s*[-–]\s*\d+\b",
+        "excerpt": r"\bchapters?\s+\d+\s*(to|-|–|through)\s*\d+|\bsampler\b|free sample|\bexcerpt\b|\bpreview\b",
+        "guide": r"study guide|summary (of|and analysis|&)|sparknotes|cliffs ?notes|book analysis|\bworkbook\b",
+        "coloring": r"coloring book|colouring book",
+    }
+    # Foreign editions: accents alone aren't enough (English titles like "Les Misérables",
+    # "The Beach of Falesá"), so require foreign function words and no English ones.
+    FOREIGN_WORDS = re.compile(
+        r"\b(el|la|los|las|del|al|una|para|por|con|y|en|mi|le|les|des|du|une|et|au|aux|der|die|das|und|ein|eine|"
+        r"il|della|dei|gli|di|os|um|uma|dos|da|els|tome|livro|volumen|"
+        r"historias|histórias|cartas|lettres|cuentos|contes|relatos|memorias|novelas|poemas|mélanges|choisies)\b", re.I)
+    ENGLISH_WORDS = re.compile(r"\b(the|of|and|or|with|by|in|to|for|a|an|i|you|my|we|is|it|have|will|no|"
+                               r"volume|book|stories|tales|novel)\b", re.I)
+    KEEP = ("Les Misérables", "Les Miserables", "Struwwelpeter")  # English-market titles with no English words
+    FOREIGN_CHARS = re.compile(r"[ñ¿¡ãõ]")
+
+
+    def classify(title):
+        if any(k in title for k in KEEP):
+            return None
+        for name, pattern in JUNK.items():
+            if re.search(pattern, title, re.I):
+                return name
+        if FOREIGN_CHARS.search(title):
+            return "foreign"
+        if FOREIGN_WORDS.search(title) and not ENGLISH_WORDS.search(title):
+            return "foreign"
+        return None
+
+
+    def selftest():
+        junk = ["The Sandman #36: Over the Sea to Sky", "Percy Jackson Collection 7 Books Set",
+                "Harry Potter Series Box Set", "Stephen King 3-Book Box Set: Everything's Eventual",
+                "Brandon Sanderson Sampler", "Adventures of Huckleberry Finn, Chapters 11 to 15",
+                "Lyddie: Novel-Ties Study Guide", "The Official Eragon Coloring Book",
+                "Los asesinos", "Las Crónicas de Narnia", "La primera herida", "Les contes macabres",
+                "Der Gesang der Toten", "¡Qué asco de bichos! y El Cocodrilo Enorme", "La Battaglia del Labirinto",
+                "Histórias Extraordinárias", "Cartas", "Lettres Choisies", "El juego de Ender", "Recuerdos de la guerra de España"]
+        keep = ["Les Misérables", "Les Misérables: Volume Two", "The Zürau Aphorisms", "The Beach of Falesá",
+                "The Mystery of Marie Rogêt", "La Pucelle; Or, the Maid of Orléans", "Hadji Murád", "Dæmon Voices",
+                "A Calendar of Wisdom: Daily Thoughts to Nourish the Soul", "The Fall of Númenor Illustrated by Alan Lee",
+                "Micromégas and Other Short Fictions", "Broca's Brain", "Twilight", "The Stand",
+                "I, Robot", "I Hear America Singing", "Jacob Have I Loved", "I Will Fear No Evil", "Un Lun Dun",
+                "Jean Valjean - Les Misérables - V", "I Hate Dragons", '"I Give You My Body . . ."', "Texas Hold'em",
+                "Slovenly Peter [Der Struwwelpeter]", "Les Miserables: Victor Hugo (5 VOLUMES) (Classics, World Literature) [Annotated]",
+                "The Signal-Man | El guardavía; To Be Read at Dusk | Para leer al atardecer"]
+        for t in junk:
+            assert classify(t), f"should be junk: {t}"
+        for t in keep:
+            assert not classify(t), f"should be kept: {t} ({classify(t)})"
+        print("selftest ok")
+
+
+    def api(path, data=None, method="GET"):
+        req = urllib.request.Request(HOST + path, method=method,
+                                     data=json.dumps(data).encode() if data is not None else None,
+                                     headers={"X-Api-Key": os.environ["READARR_API_KEY"], "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            body = r.read()
+            return json.loads(body) if body else None
+
+
+    def main():
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)).isoformat()
+        books = [b for b in api("/book")
+                 if b["monitored"] and b.get("added", "") >= cutoff
+                 and (b.get("statistics") or {}).get("bookFileCount", 0) == 0]
+        hits = [(b, classify(b["title"])) for b in books]
+        hits = [(b, c) for b, c in hits if c]
+        for b, c in hits:
+            print(f"{c:8} | {b['title']}")
+        if hits and not DRY_RUN:
+            api("/book/monitor", {"bookIds": [b["id"] for b, _ in hits], "monitored": False}, "PUT")
+        print(f"{'Would unmonitor' if DRY_RUN else 'Unmonitored'} {len(hits)} of {len(books)} new monitored books without files.")
+
+
+    if __name__ == "__main__":
+        if "--selftest" in sys.argv:
+            selftest()
+        else:
+            main()
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bookshelf-junk-cleanup
+  namespace: apps
+spec:
+  schedule: "0 6 * * 0" # Sundays 6 AM
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: bookshelf-junk-cleanup
+            image: python:3.12-alpine
+            command: ["sh", "-c", "python /scripts/cleanup.py --selftest && python /scripts/cleanup.py"]
+            env:
+            - name: READARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: READARR_API_KEY
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: bookshelf-junk-cleanup-script
