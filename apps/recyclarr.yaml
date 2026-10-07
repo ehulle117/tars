@@ -104,9 +104,7 @@ spec:
           containers:
           - name: recyclarr
             image: ghcr.io/recyclarr/recyclarr:8
-            # --preview = dry run (prints changes, writes nothing). Drop it once a
-            # preview run's output has been reviewed.
-            command: ["recyclarr", "sync", "--preview"]
+            command: ["recyclarr", "sync"]
             env:
             - name: RADARR_API_KEY
               valueFrom:
