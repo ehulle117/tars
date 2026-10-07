@@ -57,9 +57,10 @@ data:
             if state not in STUCK_STATES:
                 continue
             age_h = hours_since(rec["added"]) if rec.get("added") else 0
-            if age_h < STUCK_AGE_HOURS:
-                continue
             msgs = rec.get("statusMessages") or []
+            # Fake .exe releases are malware, not a slow import - report them immediately.
+            if age_h < STUCK_AGE_HOURS and "executable" not in json.dumps(msgs).lower():
+                continue
             err = "; ".join(m.get("title", "") for m in msgs) or state
             section["stuck"].append({
                 "title": rec.get("title", "unknown"),

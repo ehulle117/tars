@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: recyclarr-config
+  namespace: apps
+data:
+  # Minimal TRaSH set: block BR-DISK/LQ/x265-HD, score repacks. Scores only -
+  # profiles are listed by name with reset disabled so Recyclarr never touches
+  # their qualities or the existing "Executable release (block)" CF, which the
+  # Bluray profiles used by bluray-fallback-check depend on.
+  recyclarr.yml: |
+    radarr:
+      radarr:
+        base_url: http://radarr-svc.apps.svc.cluster.local:7878
+        api_key: !env_var RADARR_API_KEY
+        media_management:
+          propers_and_repacks: do_not_prefer
+        quality_profiles:
+          - name: Any
+            reset_unmatched_scores: { enabled: false }
+          - name: SD
+            reset_unmatched_scores: { enabled: false }
+          - name: HD-720p
+            reset_unmatched_scores: { enabled: false }
+          - name: HD-1080p
+            reset_unmatched_scores: { enabled: false }
+          - name: Ultra-HD
+            reset_unmatched_scores: { enabled: false }
+          - name: HD - 720p/1080p
+            reset_unmatched_scores: { enabled: false }
+          - name: Bluray
+            reset_unmatched_scores: { enabled: false }
+          - name: Bluray or WebDL (fallback)
+            reset_unmatched_scores: { enabled: false }
+        custom_formats:
+          - trash_ids:
+              - ed38b889b31be83fda192888e2286d83 # BR-DISK
+              - 90a6f9a284dff5103f6346090e6280c8 # LQ
+              - e204b80c87be9497a8a6eaff48f72905 # LQ (Release Title)
+              - dc98083864ea246d05a42df0d05f81cc # x265 (HD)
+              - e7718d7a3ce595f289bfee26adc178f5 # Repack/Proper
+              - ae43b294509409a6a13919dedd4764c4 # Repack2
+            assign_scores_to:
+              - name: Any
+              - name: SD
+              - name: HD-720p
+              - name: HD-1080p
+              - name: Ultra-HD
+              - name: HD - 720p/1080p
+              - name: Bluray
+              - name: Bluray or WebDL (fallback)
+    sonarr:
+      sonarr:
+        base_url: http://sonarr-svc.apps.svc.cluster.local:8989
+        api_key: !env_var SONARR_API_KEY
+        media_management:
+          propers_and_repacks: do_not_prefer
+        quality_profiles:
+          - name: Any
+            reset_unmatched_scores: { enabled: false }
+          - name: SD
+            reset_unmatched_scores: { enabled: false }
+          - name: HD-720p
+            reset_unmatched_scores: { enabled: false }
+          - name: HD-1080p
+            reset_unmatched_scores: { enabled: false }
+          - name: Ultra-HD
+            reset_unmatched_scores: { enabled: false }
+          - name: HD - 720p/1080p
+            reset_unmatched_scores: { enabled: false }
+        custom_formats:
+          - trash_ids:
+              - 85c61753df5da1fb2aab6f2a47426b09 # BR-DISK
+              - 9c11cd3f07101cdba90a2d81cf0e56b4 # LQ
+              - e2315f990da2e2cbfc9fa5b7a6fcfe48 # LQ (Release Title)
+              - 47435ece6b99a0b477caf360e79ba0bb # x265 (HD)
+              - ec8fa7296b64e8cd390a1600981f3923 # Repack/Proper
+              - eb3d5cc0a2be0db205fb823640db6a3c # Repack2
+            assign_scores_to:
+              - name: Any
+              - name: SD
+              - name: HD-720p
+              - name: HD-1080p
+              - name: Ultra-HD
+              - name: HD - 720p/1080p
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: recyclarr
+  namespace: apps
+spec:
+  schedule: "20 5 * * *" # 5:20 AM daily
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          nodeSelector:
+            kubernetes.io/hostname: tars
+          containers:
+          - name: recyclarr
+            image: ghcr.io/recyclarr/recyclarr:8
+            # --preview = dry run (prints changes, writes nothing). Drop it once a
+            # preview run's output has been reviewed.
+            command: ["recyclarr", "sync", "--preview"]
+            env:
+            - name: RADARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: RADARR_API_KEY
+            - name: SONARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: SONARR_API_KEY
+            volumeMounts:
+            - name: config
+              mountPath: /config/recyclarr.yml
+              subPath: recyclarr.yml
+            - name: data
+              mountPath: /config
+          restartPolicy: Never
+          volumes:
+          - name: config
+            configMap:
+              name: recyclarr-config
+          - name: data
+            emptyDir: {}

@@ -1,44 +1,40 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: readarr-config-pvc
+  name: bazarr-config-pvc
   namespace: apps
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: local-path 
+  storageClassName: local-path
   resources:
     requests:
-      storage: 10Gi
+      storage: 2Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: readarr
+  name: bazarr
   namespace: apps
   labels:
-    app: readarr
+    app: bazarr
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: readarr
+      app: bazarr
   strategy:
-    type: Recreate 
+    type: Recreate
   template:
     metadata:
       labels:
-        app: readarr
+        app: bazarr
     spec:
       nodeSelector:
         kubernetes.io/hostname: tars
       containers:
-        - name: readarr
-          # Bookshelf: maintained Readarr fork (Readarr upstream is archived and its
-          # metadata server is dead). softcover = Goodreads metadata, the only
-          # variant compatible with the existing Readarr DB. Upgrades the DB in
-          # place - rolling back means restoring /config from the appdata backup.
-          image: ghcr.io/pennydreadful/bookshelf:softcover-v0.4.21.182
+        - name: bazarr
+          image: lscr.io/linuxserver/bazarr:latest
           env:
             - name: PUID
               value: "1000"
@@ -47,37 +43,32 @@ spec:
             - name: TZ
               value: "America/New_York"
           ports:
-            - containerPort: 8787
+            - containerPort: 6767
           volumeMounts:
             - name: config
               mountPath: /config
-            - name: media
-              mountPath: /data
+            # Same mount path as Sonarr/Radarr's root folders (/media/media/{tv,movies}),
+            # so Bazarr needs no path mappings.
             - name: media
               mountPath: /media
-            - name: downloads
-              mountPath: /downloads
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: readarr-config-pvc
+            claimName: bazarr-config-pvc
         - name: media
           persistentVolumeClaim:
             claimName: nfs-media-pvc
-        - name: downloads
-          persistentVolumeClaim:
-            claimName: deluge-downloads-pvc
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: readarr-svc
+  name: bazarr-svc
   namespace: apps
 spec:
   type: LoadBalancer
   selector:
-    app: readarr
+    app: bazarr
   ports:
     - protocol: TCP
-      port: 8787
-      targetPort: 8787
+      port: 6767
+      targetPort: 6767
