@@ -34,7 +34,7 @@ data:
         r"|\[\d{2}-\d{2,3}\]|\b\d{2}-?bit\b)",
         re.I,
     )
-    MOVIE_OK = re.compile(r" \(\d{4}\)$")  # Radarr: "Title (Year)"
+    MOVIE_OK = re.compile(r" \(\d{4}\)( \{tmdb-\d+\})?$")  # Radarr: "Title (Year)" or "Title (Year) {tmdb-ID}"
     BAD_EXT = {".exe", ".scr", ".bat", ".cmd", ".msi", ".lnk", ".vbs", ".jar", ".com"}
 
 
@@ -49,6 +49,9 @@ data:
         assert leftover("movies", "Blade.Runner.2049.2017.PROPER.2160p-FGT")
         assert leftover("movies", "www.UIndex.org    -    Rango.2011.1080p.BluRay.H264-RMX")
         assert not leftover("movies", "Blade Runner 2049 (2017)")
+        assert not leftover("movies", "Blade Runner 2049 (2017) {tmdb-335984}")
+        assert leftover("movies", "Blade.Runner.2049.2017 {tmdb-335984}")
+        assert not leftover("tv", "Ted Lasso {tvdb-383203}")
         assert leftover("tv", "Ted Lasso S04E07 Yes and Baby 1080p WEB-DL.mkv")
         assert not leftover("tv", "Ted Lasso")
         assert leftover("music", "Rush - Signals (Drummer's Edition) Flac")
