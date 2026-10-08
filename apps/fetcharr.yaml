@@ -59,6 +59,18 @@ spec:
           envFrom:
             - secretRef:
                 name: fetcharr-secrets
+          # Fetcharr's main thread can die (e.g. an *arr is down at startup) while
+          # the JVM keeps running, so the pod stays "Running" and never searches
+          # again. It logs on startup and every SEARCH_INTERVAL run; no log write
+          # in 2.5 intervals means it's wedged - restart it. Repeated restarts
+          # then trip pod-health-check's restart alert.
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "test -n \"$(find /app/logs -maxdepth 1 -name 'fetcharr-*' -mmin -150)\""]
+            initialDelaySeconds: 300
+            periodSeconds: 600
+            timeoutSeconds: 10
+            failureThreshold: 1
           volumeMounts:
             - name: config
               mountPath: /app/config
