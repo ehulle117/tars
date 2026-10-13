@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block body %}
+<form class="row" method="post" action="/batch">
+  <input name="name" placeholder="New batch name" required>
+  <button>Start planning</button>
+</form>
+
+{% for st, rows in groups.items() %}{% if rows %}
+<h2>{{ st }} <span class="muted">({{ rows|length }})</span></h2>
+<section class="scroll">
+<table>
+  <tr><th>Batch</th><th>Style</th><th>Vol</th><th>OG</th><th>Current</th><th>ABV</th><th>Day</th><th>Next</th></tr>
+  {% for b, s in rows %}
+  <tr>
+    <td><a href="/batch/{{ b.id }}">{{ b.name }}</a></td>
+    <td>{{ b.style or "" }}</td>
+    <td class="num">{{ b.volume_gal or "" }}{% if b.volume_gal %} gal{% endif %}</td>
+    <td class="num">{{ "%.3f"|format(s.og) if s.og else "" }}</td>
+    <td class="num">{{ "%.3f"|format(s.cur) if s.cur else "" }}</td>
+    <td class="num">{{ "%.1f%%"|format(s.abv) if s.abv is defined else "" }}</td>
+    <td class="num">{{ s.days if s.days is defined else "" }}</td>
+    <td class="wrap next">{% if s.next_link %}<a href="{{ s.next_link }}" target="_blank" rel="noopener">{{ s.next }}</a>{% else %}{{ s.next or "" }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+</section>
+{% endif %}{% endfor %}
+{% if not groups.values()|sum(start=[]) %}<p class="muted">No batches yet — name one above, or start from a <a href="/recipes">recipe</a>.</p>{% endif %}
+{% endblock %}

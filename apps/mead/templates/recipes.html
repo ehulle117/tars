@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Recipes · Mead Log{% endblock %}
+{% block body %}
+<p class="muted">Starter recipes from the <a href="https://wiki.meadtools.com/en/recipes" target="_blank" rel="noopener">Modern Meadmaking wiki</a>, plus any batch you save as a recipe. Read the full write-up before brewing.</p>
+<section class="scroll">
+<table>
+  <tr><th>Recipe</th><th>Style</th><th>Vol</th><th>Target OG</th><th>Est. OG</th><th>Target FG</th><th>Yeast</th><th></th></tr>
+  {% for b, s in rows %}
+  <tr>
+    <td><a href="/batch/{{ b.id }}">{{ b.name }}</a></td>
+    <td>{{ b.style or "" }} {% if s.style_class %}<span class="badge">{{ s.style_class }}</span>{% endif %}</td>
+    <td class="num">{{ b.volume_gal or "" }}{% if b.volume_gal %} gal{% endif %}</td>
+    <td class="num">{{ "%.3f"|format(b.target_og) if b.target_og else "" }}</td>
+    <td class="num">{{ "%.3f"|format(s.est_og) if s.est_og else "" }}</td>
+    <td class="num">{{ "%.3f"|format(b.target_fg) if b.target_fg else "" }}{% if b.target_fg_max %}–{{ "%.3f"|format(b.target_fg_max) }}{% endif %}</td>
+    <td>{{ b.yeast or "" }}</td>
+    <td><form class="inline" method="post" action="/batch/{{ b.id }}/clone"><button>Brew this</button></form></td>
+  </tr>
+  {% endfor %}
+</table>
+</section>
+{% if not rows %}<p class="muted">No recipes. Use "Save as recipe" on a batch.</p>{% endif %}
+{% endblock %}

@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}{{ b.name }} · Mead Log{% endblock %}
+{% block head %}<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>{% endblock %}
+{% block body %}
+<h1 style="margin:.25rem 0">{{ b.name }} <span class="muted" style="font-size:1rem">{{ b.status }}</span>{% if s.style_class %} <span class="badge">{{ s.style_class }}</span>{% endif %}</h1>
+{% if b.source_url %}<p class="muted">Source: <a href="{{ b.source_url }}" target="_blank" rel="noopener">{{ b.source_url }}</a></p>{% endif %}
+{% if b.status == "recipe" %}<form method="post" action="/batch/{{ b.id }}/clone"><button>Brew this →</button> <span class="muted">copies it into a planned batch</span></form>{% endif %}
+{% if s.next %}<p class="next">→ {% if s.next_link %}<a href="{{ s.next_link }}" target="_blank" rel="noopener">{{ s.next }}</a>{% else %}{{ s.next }}{% endif %}</p>{% endif %}
+
+<section class="stats">
+  <div><small>OG{% if s.reads %} (measured){% elif s.est_og %} (est.){% else %} (target){% endif %}</small><b>{{ "%.3f"|format(s.og) if s.og else "—" }}</b></div>
+  <div><small>Current</small><b>{{ "%.3f"|format(s.cur) if s.cur else "—" }}</b></div>
+  <div><small>ABV</small><b>{{ "%.1f%%"|format(s.abv) if s.abv is defined else "—" }}</b></div>
+  <div><small>Attenuation</small><b>{{ "%.0f%%"|format(s.att) if s.att is defined else "—" }}</b></div>
+  <div><small>1/3 break</small><b>{{ "%.3f"|format(s["break"]) if s["break"] is defined else "—" }}</b></div>
+  <div><small>Day</small><b>{{ s.days if s.days is defined else "—" }}</b></div>
+  {% if b.target_og %}<div><small>Target OG</small><b>{{ "%.3f"|format(b.target_og) }}</b></div>{% endif %}
+  {% if b.target_fg %}<div><small>Target FG</small><b>{{ "%.3f"|format(b.target_fg) }}{% if b.target_fg_max %}–{{ "%.3f"|format(b.target_fg_max) }}{% endif %}</b></div>{% endif %}
+  {% if s.est_og and (s.reads or b.target_og) %}<div><small>Recipe est. OG</small><b>{{ "%.3f"|format(s.est_og) }}</b></div>{% endif %}
+  {% if s.stable %}<div><small>Gravity</small><b>stable</b></div>{% endif %}
+</section>
+
+<section>
+<h2 style="margin-top:0">Details</h2>
+<form method="post" action="/batch/{{ b.id }}">
+  <div class="grid2">
+    <label>Name<input name="name" value="{{ b.name }}" required></label>
+    <label>Status<select name="status">{% for st in statuses %}<option {{ "selected" if st == b.status }}>{{ st }}</option>{% endfor %}</select></label>
+    <label>Style<input name="style" value="{{ b.style or '' }}" placeholder="traditional, melomel…" list="styles"></label>
+    <label>Volume (gal)<input name="volume_gal" type="number" step="0.01" value="{{ b.volume_gal or '' }}"></label>
+    <label>Yeast<input name="yeast" value="{{ b.yeast or '' }}" placeholder="71B, D47, EC-1118…"></label>
+    <label>Yeast N need<select name="n_need">{% for n in n_needs %}<option {{ "selected" if n == b.n_need }}>{{ n }}</option>{% endfor %}</select></label>
+    <label>Nutrients<select name="nutrient_protocol">{% for k, v in protocols.items() %}<option value="{{ k }}" {{ "selected" if k == b.nutrient_protocol }}>{{ v }}</option>{% endfor %}</select></label>
+    <label style="flex-direction:row;gap:.4rem;align-items:center">Rehydrated with GoFerm<input type="checkbox" name="goferm" {{ "checked" if b.goferm }}></label>
+    <label>Start / pitch<input name="start_date" type="date" value="{{ b.start_date or '' }}"></label>
+    <label>Bottled<input name="bottle_date" type="date" value="{{ b.bottle_date or '' }}"></label>
+    <label>Target OG<input name="target_og" type="number" step="0.001" value="{{ b.target_og or '' }}"></label>
+    <label>Target FG (min)<input name="target_fg" type="number" step="0.001" value="{{ b.target_fg or '' }}"></label>
+    <label>Target FG (max)<input name="target_fg_max" type="number" step="0.001" value="{{ b.target_fg_max or '' }}"></label>
+    <label>Source URL<input name="source_url" type="url" value="{{ b.source_url or '' }}"></label>
+  </div>
+  <label style="margin-top:.5rem">Notes<textarea name="notes" rows="3">{{ b.notes or '' }}</textarea></label>
+  <datalist id="styles">{% for x in ["traditional","melomel","cyser","pyment","metheglin","braggot","bochet","acerglyn","session"] %}<option>{{ x }}</option>{% endfor %}</datalist>
+  <p><button>Save</button></p>
+</form>
+</section>
+
+<section>
+<h2 style="margin-top:0">Ingredients</h2>
+<div class="scroll"><table>
+  <tr><th>Kind</th><th>Name</th><th>Amount</th><th>PPG</th><th>Added</th><th></th></tr>
+  {% for i in s.ings %}<tr>
+    <td>{{ i.kind }}</td><td>{{ i.name or "" }}</td><td class="num">{{ i.amount|round(3) }} {{ i.unit }}</td>
+    <td class="num">{{ i.ppg or "" }}</td><td>{{ i.added_on or "" }}</td>
+    <td><form class="inline" method="post" action="/batch/{{ b.id }}/ingredient/{{ i.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
+  </tr>{% endfor %}
+</table></div>
+<form class="row" method="post" action="/batch/{{ b.id }}/ingredient">
+  <label>Kind<select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
+  <label>Name<input name="name" placeholder="orange blossom"></label>
+  <label>Amount<input name="amount" type="number" step="any" required></label>
+  <label>Unit<select name="unit">{% for u in ["lb","oz","kg","g","gal","l","ml","tsp","tbsp","each"] %}<option>{{ u }}</option>{% endfor %}</select></label>
+  <label>PPG<input name="ppg" type="number" step="any" placeholder="honey: 35"></label>
+  <label>Added<input name="added_on" type="date"></label>
+  <button>Add</button>
+</form>
+<p class="muted" style="font-size:.85rem">PPG = gravity points per lb per gallon (honey defaults to 35; fruit ~4–8), or for liquids, points per gallon of that liquid (apple juice ~50). Items without a PPG don't count toward est. OG.</p>
+</section>
+
+<section>
+<h2 style="margin-top:0">Readings</h2>
+{% if s.reads|length > 1 %}<canvas id="chart" height="110"></canvas>{% endif %}
+<div class="scroll"><table>
+  <tr><th>Date</th><th>SG</th><th>°F</th><th>Corrected</th><th>pH</th><th>Note</th><th></th></tr>
+  {% for r in s.reads %}<tr>
+    <td>{{ r.taken_on }}</td><td class="num">{{ "%.3f"|format(r.sg) }}</td><td class="num">{{ r.temp_f or "" }}</td>
+    <td class="num">{{ "%.4f"|format(r.sg_c) }}</td><td class="num">{{ r.ph or "" }}</td><td class="wrap">{{ r.note or "" }}</td>
+    <td><form class="inline" method="post" action="/batch/{{ b.id }}/reading/{{ r.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
+  </tr>{% endfor %}
+</table></div>
+<form class="row" method="post" action="/batch/{{ b.id }}/reading">
+  <label>Date<input name="taken_on" type="date" value="{{ today }}"></label>
+  <label>SG<input name="sg" type="number" step="0.001" min="0.980" max="1.200" required></label>
+  <label>Temp °F<input name="temp_f" type="number" step="0.1"></label>
+  <label>pH<input name="ph" type="number" step="0.01"></label>
+  <label>Note<input name="note"></label>
+  <button>Add reading</button>
+</form>
+<p class="muted" style="font-size:.85rem">First reading is treated as OG. Temp corrects to a 60°F hydrometer.</p>
+</section>
+
+{% if s.tosna %}
+<section>
+<h2 style="margin-top:0">Nutrients (TOSNA, Fermaid-O)</h2>
+<p class="muted">Target YAN {{ s.tosna.yan_ppm }} ppm · total {{ s.tosna.total_g }} g · {{ s.nutrient_done }} of 4 logged{% if s.tosna.capped %} · capped at the 2.5 g/L Fermaid-O max{% endif %} · <a href="https://wiki.meadtools.com/en/process/nutrient_schedules" target="_blank" rel="noopener">about TOSNA</a></p>
+<ol>{% for d in s.tosna.doses %}
+  <li {% if loop.index0 < s.nutrient_done %}style="text-decoration:line-through" class="muted"{% endif %}>{{ d.g }} g at {{ d.when }}</li>
+{% endfor %}</ol>
+<p class="muted" style="font-size:.85rem">Log each addition as a "nutrient" event below to tick it off.</p>
+</section>
+{% endif %}
+
+<section>
+<h2 style="margin-top:0">Log</h2>
+<div class="scroll"><table>
+  <tr><th>Date</th><th>Event</th><th>Note</th><th>Rating</th><th></th></tr>
+  {% for e in events %}<tr>
+    <td>{{ e.on_date }}</td><td>{{ e.kind }}</td><td class="wrap">{{ e.note or "" }}</td><td>{{ "★" * e.rating if e.rating else "" }}</td>
+    <td><form class="inline" method="post" action="/batch/{{ b.id }}/event/{{ e.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
+  </tr>{% endfor %}
+</table></div>
+<form class="row" method="post" action="/batch/{{ b.id }}/event">
+  <label>Date<input name="on_date" type="date" value="{{ today }}"></label>
+  <label>Event<select name="kind">{% for k in event_kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
+  <label>Note<input name="note" size="30"></label>
+  <label>Rating<select name="rating"><option value=""></option>{% for n in range(1,6) %}<option>{{ n }}</option>{% endfor %}</select></label>
+  <button>Log</button>
+</form>
+</section>
+
+<p>
+  {% if b.status != "recipe" %}<form class="inline" method="post" action="/batch/{{ b.id }}/clone"><button>Clone as new batch</button></form>
+  <form class="inline" method="post" action="/batch/{{ b.id }}/save-recipe"><button>Save as recipe</button></form>{% endif %}
+  <form class="inline" method="post" action="/batch/{{ b.id }}/delete" onsubmit="return confirm('Delete {{ b.name|e }} and all its readings?')"><button class="danger">Delete batch</button></form>
+  {% set ph = (s.reads|selectattr("ph")|map(attribute="ph")|list|last) if s.reads|selectattr("ph")|list else "" %}
+  <a href="/calc{% if s.cur and b.volume_gal %}?b_cur={{ '%.3f'|format(s.cur) }}&b_vol={{ b.volume_gal }}&s_vol={{ b.volume_gal }}&ph={{ ph }}&abv={{ '%.1f'|format(s.abv) }}{% endif %}">Stabilize / backsweeten →</a>
+</p>
+
+{% if s.reads|length > 1 %}
+<script>
+  const css = getComputedStyle(document.documentElement);
+  new Chart(document.getElementById("chart"), {
+    type: "line",
+    data: {
+      labels: {{ s.reads | map(attribute="taken_on") | list | tojson }},
+      datasets: [{ label: "SG (corrected)", data: {{ s.reads | map(attribute="sg_c") | list | tojson }},
+                   borderColor: css.getPropertyValue("--accent"), tension: .2 }]
+    },
+    options: { plugins: { legend: { display: false } },
+               scales: { y: { ticks: { callback: v => v.toFixed(3) } } } }
+  });
+</script>
+{% endif %}
+{% endblock %}

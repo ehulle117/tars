@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mead-data-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mead
+  namespace: apps
+  labels:
+    app: mead
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mead
+  strategy:
+    type: Recreate # SQLite: exactly one writer
+  template:
+    metadata:
+      labels:
+        app: mead
+    spec:
+      # tars node: amd64 image, and its local-path storage is in the 3 AM appdata backup
+      nodeSelector:
+        kubernetes.io/hostname: tars
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: mead
+          image: ghcr.io/ehulle117/tars-mead:main
+          imagePullPolicy: Always
+          env:
+            - name: TZ
+              value: "America/New_York"
+          ports:
+            - containerPort: 8770
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8770
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mead-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mead-svc
+  namespace: apps
+spec:
+  type: LoadBalancer
+  selector:
+    app: mead
+  ports:
+    - protocol: TCP
+      port: 8770
+      targetPort: 8770
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mead-ingress
+  namespace: apps
+spec:
+  rules:
+    - host: mead.tars.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mead-svc
+                port:
+                  number: 8770

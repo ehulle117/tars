@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Calculators · Mead Log{% endblock %}
+{% block body %}
+{% if out.error %}<p style="color:var(--warn)">{{ out.error }}</p>{% endif %}
+
+<section><h2 style="margin-top:0">ABV</h2>
+<form class="row"><label>OG<input name="og" type="number" step="0.001" value="{{ q.og }}"></label>
+<label>FG<input name="fg" type="number" step="0.001" value="{{ q.fg }}"></label><button>Calc</button></form>
+{% if out.abv %}<p>Standard <b>{{ "%.2f"|format(out.abv[0]) }}%</b> · high-gravity <b>{{ "%.2f"|format(out.abv[1]) }}%</b> · attenuation {{ "%.0f"|format(out.abv[2]) }}% · <span class="badge">{{ out.abv[3] }}</span></p>{% endif %}
+</section>
+
+<section><h2 style="margin-top:0">Hydrometer temperature</h2>
+<form class="row"><label>SG read<input name="sg" type="number" step="0.001" value="{{ q.sg }}"></label>
+<label>Sample °F<input name="temp_f" type="number" step="0.1" value="{{ q.temp_f }}"></label><button>Calc</button></form>
+{% if out.temp %}<p>Corrected (60°F): <b>{{ "%.4f"|format(out.temp) }}</b></p>{% endif %}
+</section>
+
+<section><h2 style="margin-top:0">Honey → OG</h2>
+<form class="row"><label>Honey lb<input name="honey_lb" type="number" step="any" value="{{ q.honey_lb }}"></label>
+<label>Batch gal<input name="vol" type="number" step="any" value="{{ q.vol }}"></label><button>Calc</button></form>
+{% if out.og_est %}<p>Estimated OG: <b>{{ "%.3f"|format(out.og_est) }}</b></p>{% endif %}
+</section>
+
+<section><h2 style="margin-top:0">TOSNA nutrients</h2>
+<form class="row"><label>OG<input name="t_og" type="number" step="0.001" value="{{ q.t_og }}"></label>
+<label>Gal<input name="t_vol" type="number" step="any" value="{{ q.t_vol }}"></label>
+<label>Yeast N need<select name="t_n">{% for n in n_needs %}<option {{ "selected" if n == q.get("t_n","medium") }}>{{ n }}</option>{% endfor %}</select></label>
+<label style="flex-direction:row;gap:.4rem;align-items:center">GoFerm<input type="checkbox" name="t_goferm" {{ "checked" if "t_goferm" in q or "t_og" not in q }}></label><button>Calc</button></form>
+{% if out.tosna %}<p>YAN {{ out.tosna.yan_ppm }} ppm · {{ out.tosna.total_g }} g Fermaid-O total{% if out.tosna.capped %} (capped at 2.5 g/L){% endif %}</p>
+<ol>{% for d in out.tosna.doses %}<li>{{ d.g }} g at {{ d.when }}</li>{% endfor %}</ol>{% endif %}
+</section>
+
+<section><h2 style="margin-top:0">Stabilize</h2>
+<form class="row"><label>pH<input name="ph" type="number" step="0.01" value="{{ q.ph }}"></label>
+<label>Gal<input name="s_vol" type="number" step="any" value="{{ q.s_vol }}"></label>
+<label>ABV %<input name="abv" type="number" step="0.1" value="{{ q.abv }}"></label><button>Calc</button></form>
+{% if out.kmeta %}<p>K-meta <b>{{ out.kmeta.g }} g</b> (≈{{ out.kmeta.campden }} Campden tablets; {{ out.kmeta.free_so2_ppm }} ppm free SO₂ for 0.8 molecular) + K-sorbate <b>{{ out.sorbate }} g</b></p>
+{% if abv and abv > 14 %}<p style="color:var(--warn)">At {{ abv }}% ABV, sorbate may not be effective (the wiki says above ~14–15%).</p>{% endif %}{% endif %}
+<p class="muted" style="font-size:.85rem">Only stabilize once fermentation has stopped: two readings a week apart that match. <a href="https://wiki.meadtools.com/en/process/stabilization" target="_blank" rel="noopener">Wiki: stabilization</a></p>
+</section>
+
+<section><h2 style="margin-top:0">Backsweeten</h2>
+<form class="row"><label>Current SG<input name="b_cur" type="number" step="0.001" value="{{ q.b_cur }}"></label>
+<label>Target SG<input name="b_tgt" type="number" step="0.001" value="{{ q.b_tgt }}"></label>
+<label>Gal<input name="b_vol" type="number" step="any" value="{{ q.b_vol }}"></label><button>Calc</button></form>
+{% if out.sweet is defined %}<p>Add up to <b>{{ out.sweet }} lb</b> honey. Start with ½–¾ of that ({{ (out.sweet * 0.5)|round(2) }}–{{ (out.sweet * 0.75)|round(2) }} lb), re-measure, and step up.</p>{% endif %}
+<p class="muted" style="font-size:.85rem">Stabilize first and wait 24 h. <a href="https://wiki.meadtools.com/en/process/back_sweeten" target="_blank" rel="noopener">Wiki: backsweetening</a></p>
+</section>
+{% endblock %}
