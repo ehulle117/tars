@@ -8,7 +8,10 @@
 # that directory every run: one Claude+gh triage call per queue file (dedup
 # against open issues, open/comment/skip), one Discord post per file to the
 # single ALERTS_CHANNEL_ID, then deletes the file. A failed run leaves files
-# in place for the next attempt.
+# in place for the next attempt, exits non-zero, and skips the Uptime Kuma
+# heartbeat - triage can't queue an alert about itself, so Kuma is the only
+# thing that notices it's broken (it silently failed every file for a week
+# on an expired Claude login before the 2026-10-13 outage).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -66,14 +69,10 @@ data:
             "  grep tag_name | cut -d'\"' -f4 | tr -d v) && "
             "curl -L -o /tmp/gh.tar.gz https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz && "
             "tar -xzf /tmp/gh.tar.gz -C /tmp && "
-            "install -m 0755 /tmp/gh_${GH_VERSION}_linux_amd64/bin/gh /usr/local/bin/gh && "
-            # Auth config lives at ~/.claude.json, outside the mounted
-            # ~/.claude/ dir, so it's symlinked to the copy the dev pod
-            # (claude-code.yaml) already persisted.
-            "[ -e /root/.claude.json ] && [ ! -L /root/.claude.json ] && mv /root/.claude.json /root/.claude/claude.json; "
-            "ln -sf /root/.claude/claude.json /root/.claude.json"
+            "install -m 0755 /tmp/gh_${GH_VERSION}_linux_amd64/bin/gh /usr/local/bin/gh"
         ], timeout=180)
 
+        failed = 0
         for fname in sorted(os.listdir(QUEUE_DIR)):
             fpath = os.path.join(QUEUE_DIR, fname)
             with open(fpath) as f:
@@ -95,7 +94,18 @@ data:
                 # Leave the file in place for the next scheduled run rather
                 # than crashing the pod - one bad file used to take down
                 # triage for every other file in the queue too (tars#85).
-                print(f"[{label}] triage failed, leaving in queue for retry: {e}")
+                failed += 1
+                # CalledProcessError's own message drops claude's output,
+                # which is where the actual reason (e.g. expired auth) is.
+                detail = ((getattr(e, "stdout", "") or "") + (getattr(e, "stderr", "") or "")).strip()[-500:]
+                print(f"[{label}] triage failed, leaving in queue for retry: {e} {detail}")
+
+        if failed:
+            sys.exit(f"{failed} queue file(s) failed triage")
+
+    kuma_url = os.environ.get("KUMA_PUSH_URL")
+    if kuma_url:
+        subprocess.run(["wget", "-q", "-O-", kuma_url], check=True, timeout=15)
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -109,14 +119,13 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      backoffLimit: 0
       template:
         spec:
-          restartPolicy: OnFailure
-          # Co-located with the claude-code dev pod's config PVC so triage
-          # can reuse its existing Claude Code login - no separate Anthropic
-          # API key/billing.
-          nodeSelector:
-            kubernetes.io/hostname: tars
+          # Never (not OnFailure): a failed run already leaves its files for
+          # the next scheduled run, and an in-pod restart would just redo the
+          # whole npm/gh bootstrap against the same failure.
+          restartPolicy: Never
           containers:
           - name: tars-alert-triage
             image: python:3.12-alpine
@@ -138,6 +147,20 @@ spec:
               value: "ehulle117/tars"
             - name: HOME
               value: "/root"
+            # Long-lived token from `claude setup-token` (subscription auth, no
+            # API billing). Replaces reusing the claude-code dev pod's login off
+            # its tars-local PVC, which pinned triage to tars and expired.
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: claude-oauth
+                  key: token
+            - name: KUMA_PUSH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: uptime-kuma-push
+                  key: tars_alert_triage_url
+                  optional: true
             resources:
               requests:
                 cpu: 100m
@@ -150,8 +173,6 @@ spec:
               mountPath: /scripts
             - name: lib
               mountPath: /alert-lib
-            - name: claude-config
-              mountPath: /root/.claude
             - name: triage-queue
               mountPath: /queue
           volumes:
@@ -161,9 +182,6 @@ spec:
           - name: lib
             configMap:
               name: alert-lib
-          - name: claude-config
-            persistentVolumeClaim:
-              claimName: claude-code-config-pvc
           - name: triage-queue
             persistentVolumeClaim:
               claimName: nfs-media-pvc
