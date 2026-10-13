@@ -78,21 +78,3 @@ spec:
     - protocol: TCP
       port: 8770
       targetPort: 8770
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: mead-ingress
-  namespace: apps
-spec:
-  rules:
-    - host: mead.tars.local
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: mead-svc
-                port:
-                  number: 8770

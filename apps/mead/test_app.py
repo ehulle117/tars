@@ -45,3 +45,22 @@ def test_calc_page():
     t = c.get("/calc?og=1.1&fg=1.0&t_og=1.1&t_vol=1&t_goferm=on&ph=3.5&s_vol=5&abv=15&b_cur=1.0&b_tgt=1.01&b_vol=5").text
     assert "14.20%" in t and "standard · dry" in t and "Campden" in t
     assert "sorbate may not be effective" in t and "1.43 lb" in t
+
+
+def test_seed_upgrade_no_duplicates_and_deletes_stick():
+    import sqlite3
+
+    import seed
+    con = sqlite3.connect(":memory:")
+    con.executescript(main.SCHEMA)
+    old = seed.RECIPES
+    seed.RECIPES = old[:8]  # a database seeded before recipes 9-14 and the `seeded` table existed
+    seed.run(con)
+    con.execute("DROP TABLE seeded")
+    seed.RECIPES = old
+    count = "SELECT COUNT(*) FROM batch WHERE status='recipe'"
+    seed.run(con)
+    assert con.execute(count).fetchone()[0] == len(old) == 14
+    con.execute("DELETE FROM batch WHERE name='Bochet (5 gal)'")
+    seed.run(con)
+    assert con.execute(count).fetchone()[0] == 13

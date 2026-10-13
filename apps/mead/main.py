@@ -46,8 +46,7 @@ def db():
 
 with db() as _c:
     _c.executescript(SCHEMA)
-    if not _c.execute("SELECT 1 FROM batch LIMIT 1").fetchone():
-        seed.run(_c)
+    seed.run(_c)
 
 app = FastAPI()
 tpl = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))

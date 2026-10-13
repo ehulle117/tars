@@ -49,7 +49,8 @@ Single-user web app on Tars for tracking past, current and planned mead batches 
   - `source_url`
 - `seed.py` inserts these wiki recipes once, when the database is empty:
   - 1 gal: Basic Traditional, Basic Metheglin, Basic Melomel, Basic Cyser
-  - 5 gal, one per style: Traditional, Chai Metheglin, Cherry Melomel, Standard Cyser
+  - 5 gal: Traditional, Chai Metheglin, Cherry Melomel, Standard Cyser, Rhodomel, Blackberry Orange Blossom Melomel, Smoked Capsicumel, Sparkling Hydromel, Bochet, Braggot
+  - Seeding adds any recipe not added before, and remembers it, so deleted recipes stay deleted
 - What gets stored for each recipe:
   - ingredients, amounts, yeast and target gravities (these are facts)
   - a short method summary in my own words
@@ -109,7 +110,7 @@ Single-user web app on Tars for tracking past, current and planned mead batches 
   - readiness probe on `GET /`
   - small resource requests
 - Service `mead-svc`: LoadBalancer on port 8770, which no other app uses.
-- Ingress at `mead.tars.local`, following the uptime-kuma pattern.
+- No Ingress: `*.tars.local` and `*.case.local` resolve to Nginx Proxy Manager (192.168.8.250), which routes `homebrew.case.local` to port 8770.
 
 ### 6. Docs and wiring
 - Add a row to the services table in `README.md`.
@@ -121,7 +122,7 @@ Single-user web app on Tars for tracking past, current and planned mead batches 
 3. Argo CD syncs `apps/mead.yaml`.
 4. Check:
    - `kubectl -n apps get pods -l app=mead`
-   - open `mead.tars.local` and see the 4 seeded recipes
+   - open `homebrew.case.local` and see the 14 seeded recipes
    - use "Brew this" to start a batch, then delete the pod and confirm the batch survives the restart
 5. Confirm the next 3 AM backup picked up `mead.db`.
 
