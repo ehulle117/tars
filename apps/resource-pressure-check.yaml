@@ -25,7 +25,8 @@ data:
     MEM_PCT_THRESHOLD = 90
     CASE_DISK_PCT_THRESHOLD = 90
     # Tars's root LV holds Deluge's local downloads/seeding (deluge-downloads-pvc).
-    # Alert well before kubelet's own DiskPressure eviction (~85% used).
+    # Alert well before kubelet's own DiskPressure eviction (nodefs.available<10%,
+    # i.e. ~90% used).
     TARS_DISK_PCT_THRESHOLD = 70
 
     ctx = ssl.create_default_context(cafile=CA_PATH)
@@ -128,10 +129,14 @@ metadata:
   namespace: apps
 spec:
   schedule: "7-59/30 * * * *"
+  # A run that can't start must not pile up behind itself - 29 Pending runs
+  # stacked on tars during the 2026-10-13 DiskPressure outage.
+  concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 600
       template:
         spec:
           serviceAccountName: cluster-health-checker
@@ -139,6 +144,20 @@ spec:
           # Pinned to tars so the hostPath mount below is tars's own disk.
           nodeSelector:
             kubernetes.io/hostname: tars
+          # This job exists to report node pressure, so it has to run *during*
+          # it: the tolerations get it past the scheduler's pressure taints, and
+          # a critical priority class is what gets it past kubelet's admission,
+          # which rejects every non-critical pod while DiskPressure is True
+          # (tolerations alone don't). Without this it went Pending for the
+          # whole 2026-10-13 outage.
+          priorityClassName: system-cluster-critical
+          tolerations:
+          - key: node.kubernetes.io/disk-pressure
+            operator: Exists
+            effect: NoSchedule
+          - key: node.kubernetes.io/memory-pressure
+            operator: Exists
+            effect: NoSchedule
           containers:
           - name: resource-pressure-check
             image: python:3.12-alpine
