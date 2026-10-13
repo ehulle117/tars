@@ -86,7 +86,7 @@ data:
     try:
         client, torrents = connect_and_get_torrents()
     except Exception as e:
-        # Leave it for the next scheduled run (every 15m) rather than
+        # Leave it for the next scheduled run (every 6h) rather than
         # crash-looping the pod on a transient Deluge slowdown/timeout.
         print(f"Couldn't reach Deluge after retries, skipping this run: {e}")
         sys.exit(0)
@@ -133,11 +133,12 @@ metadata:
   name: deluge-local-cleanup
   namespace: apps
 spec:
-  # SUSPENDED 2026-09-30 as an experiment: 5 of 6 Deluge wedges ("invalid torrent
-  # handle") began 13-18s after a run of this job started. If the wedges stop,
-  # this job is the trigger; if they continue, un-suspend it.
-  suspend: true
-  schedule: "14-59/15 * * * *" # every 15 minutes
+  # Was suspended 2026-09-30 as a wedge experiment (5 of 6 "invalid torrent
+  # handle" wedges began 13-18s after a run started). With nothing removing
+  # imported seeds, deluge-downloads-pvc filled tars's disk and caused the
+  # 2026-10-13 DiskPressure outage. Back on, but every 6h instead of every
+  # 15m: 24x fewer chances to trip a wedge, still bounded disk growth.
+  schedule: "14 */6 * * *" # every 6 hours, :14 (clear of seed-cap :36, stall-check :41)
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
