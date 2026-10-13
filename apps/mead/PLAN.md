@@ -14,7 +14,7 @@ Single-user web app on Tars for tracking past, current and planned mead batches 
 | Data | Starts empty except for the seeded wiki recipes; no import |
 | Units | US (gal, lb, °F); metric weights and volumes convert on entry |
 | Access | LAN only, no login, same as the other Tars apps |
-| Node | `tars` (amd64); the daily appdata backup already covers its local-path storage |
+| Node | `k3s-worker-case` (amd64); covered by the case-worker appdata backup. Moved off `tars` on 2026-10-13, when `tars` was tainted for disk pressure |
 
 ## Checked against the wiki
 

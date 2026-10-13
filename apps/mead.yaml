@@ -30,9 +30,10 @@ spec:
       labels:
         app: mead
     spec:
-      # tars node: amd64 image, and its local-path storage is in the 3 AM appdata backup
+      # amd64 image; this node's local-path storage is in case-worker-appdata-backup.
+      # Moving nodes later strands the local-path PVC: copy mead.db across first.
       nodeSelector:
-        kubernetes.io/hostname: tars
+        kubernetes.io/hostname: k3s-worker-case
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000
