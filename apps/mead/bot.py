@@ -59,9 +59,9 @@ def main():
     token = os.environ["DISCORD_BOT_TOKEN"]
     channel_id = int(os.environ["CHANNEL_ID"])
     allowed = {int(u) for u in os.environ["ALLOWED_USER_IDS"].split(",") if u.strip()}
-    intents = discord.Intents.default()
-    intents.message_content = True
-    client = discord.Client(intents=intents)
+    # No privileged Message Content intent (it's off for the Tars bot): Discord still shows a bot messages
+    # that mention it, and a reply pings the original author by default, so replies to tasks are readable.
+    client = discord.Client(intents=discord.Intents.default())
     http: Optional[aiohttp.ClientSession] = None
 
     async def save_reading(bid: int, sg: float, temp: Optional[float], note: str) -> str:
@@ -104,6 +104,9 @@ def main():
             return
         ref = msg.reference.resolved or await msg.channel.fetch_message(msg.reference.message_id)
         if ref.author != client.user or not (bid := batch_of(ref.content)):
+            return
+        if not msg.content.strip():
+            await msg.reply("I can't see replies with the @ mention turned off — reply again with it on (the default).")
             return
         reading = parse_reading(msg.content)
         if reading:
