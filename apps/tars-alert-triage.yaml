@@ -43,7 +43,7 @@ data:
         for attempt in range(1, attempts + 1):
             try:
                 return subprocess.run(cmd, check=True, **kwargs)
-            except subprocess.CalledProcessError as e:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                 last_error = e
                 if attempt < attempts:
                     print(f"Attempt {attempt}/{attempts} failed ({e}), retrying in {delay_seconds}s...")
@@ -61,16 +61,18 @@ data:
         print("Queue empty, nothing to triage.")
     else:
         # Bootstrap Claude Code + gh CLI only when there's actually
-        # something to triage.
+        # something to triage. Each network step gets its own timeout so a
+        # stalled fetch fails and gets retried instead of hanging (tars#121,
+        # #130); the outer timeout only kills sh, not a hung apk/npm under it.
         run_with_retries(["sh", "-c",
-            "apk add --no-cache nodejs npm bash curl tar && "
-            "npm install -g @anthropic-ai/claude-code && "
-            "GH_VERSION=$(curl -s https://api.github.com/repos/cli/cli/releases/latest | "
+            "timeout 120 apk add --no-cache nodejs npm bash curl tar && "
+            "timeout 180 npm install -g @anthropic-ai/claude-code && "
+            "GH_VERSION=$(timeout 30 curl -s https://api.github.com/repos/cli/cli/releases/latest | "
             "  grep tag_name | cut -d'\"' -f4 | tr -d v) && "
-            "curl -L -o /tmp/gh.tar.gz https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz && "
+            "timeout 120 curl -L -o /tmp/gh.tar.gz https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz && "
             "tar -xzf /tmp/gh.tar.gz -C /tmp && "
             "install -m 0755 /tmp/gh_${GH_VERSION}_linux_amd64/bin/gh /usr/local/bin/gh"
-        ], timeout=180)
+        ], timeout=480)
 
         failed = 0
         for fname in sorted(os.listdir(QUEUE_DIR)):
