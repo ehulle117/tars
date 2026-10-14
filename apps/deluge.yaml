@@ -83,6 +83,12 @@ spec:
               value: "yes"
             - name: STRICT_PORT_FORWARD
               value: "yes"
+            # The image's PIA endpoint resolver also adds Cloudflare IPs
+            # (privateinternetaccess.com etc.) to --remote; they never answer
+            # on UDP 1198 and each burned the full 60s keepalive, stretching
+            # reconnects to 2-6 min. Give up on a dead remote after 10s.
+            - name: VPN_OPTIONS
+              value: "--server-poll-timeout 10"
             - name: LAN_NETWORK
               value: "10.42.0.0/16,10.43.0.0/16"
             - name: PUID
@@ -122,7 +128,10 @@ spec:
             initialDelaySeconds: 60
             periodSeconds: 120
             timeoutSeconds: 45
-            failureThreshold: 3
+            # 6 x 120s (~12 min): rides out routine PIA reconnects, which
+            # tripped 3 x 120s and restarted the pod, while still catching a
+            # tunnel that stays dead (tars#87).
+            failureThreshold: 6
       volumes:
         - name: config
           persistentVolumeClaim:
