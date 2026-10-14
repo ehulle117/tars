@@ -126,6 +126,10 @@ spec:
           # the next scheduled run, and an in-pod restart would just redo the
           # whole npm/gh bootstrap against the same failure.
           restartPolicy: Never
+          # The bootstrap above fetches gh's linux_amd64 build, so stay off the
+          # arm64 Pi now that this isn't pinned to tars anymore.
+          nodeSelector:
+            kubernetes.io/arch: amd64
           containers:
           - name: tars-alert-triage
             image: python:3.12-alpine
