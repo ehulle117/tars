@@ -17,7 +17,8 @@
 # Restricted to ALLOWED_USER_IDS (comma-separated Discord user IDs) --
 # anyone else who @-mentions the bot gets told no. Only fires on
 # "@Tars restart valheim" (case/whitespace-insensitive) so a plain
-# @mention in conversation doesn't trigger a restart by accident.
+# @mention in conversation doesn't trigger a restart by accident; any other
+# mention is ignored silently (the token is shared with mead-bot).
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -103,17 +104,17 @@ data:
             message.channel.id, message.content,
         )
 
+        # Stay silent unless this is actually a restart request: the same bot
+        # token backs mead-bot, so replies to its brewing prompts (which
+        # Discord counts as mentions) land here too.
+        command = strip_mentions(message.content)
+        if COMMAND_PHRASE not in command:
+            log.info("ignored: stripped content %r does not contain %r", command, COMMAND_PHRASE)
+            return
+
         if message.author.id not in ALLOWED_USER_IDS:
             log.info("rejected: %s not in ALLOWED_USER_IDS=%s", message.author.id, ALLOWED_USER_IDS)
             await message.reply("Not authorized to do that.")
-            return
-
-        command = strip_mentions(message.content)
-        if COMMAND_PHRASE not in command:
-            log.info("rejected: stripped content %r does not contain %r", command, COMMAND_PHRASE)
-            await message.reply(
-                f'Mention me with "restart valheim" to restart `{DEPLOYMENT_NAME}`.'
-            )
             return
 
         log.info("authorized restart request from %s", message.author.id)
