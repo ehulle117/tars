@@ -78,3 +78,56 @@ spec:
     - protocol: TCP
       port: 8770
       targetPort: 8770
+---
+# Discord task bot: posts each due task at 6 AM ET; replies (a reading like "1.040 68F", or
+# "done") go back into the app over HTTP. Same image as the app. Reuses the Tars bot token —
+# no new bot or keys. One replica only, or tasks get posted twice.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mead-bot
+  namespace: apps
+  labels:
+    app: mead-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mead-bot
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mead-bot
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: bot
+          image: ghcr.io/ehulle117/tars-mead:main
+          imagePullPolicy: Always
+          command: ["python", "bot.py"]
+          env:
+            - name: TZ
+              value: "America/New_York"
+            - name: MEAD_URL
+              value: http://mead-svc.apps.svc.cluster.local:8770
+            - name: CHANNEL_ID
+              value: "1559709419422490625"
+            - name: ALLOWED_USER_IDS
+              value: "251566145092452352"
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: discord-alerts
+                  key: bot_token
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

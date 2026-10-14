@@ -266,6 +266,37 @@ def delete_row(bid: int, table: str, rid: int):
     return back(f"/batch/{bid}")
 
 
+def summary(b, s) -> dict:
+    last = s["reads"][-1] if s["reads"] else None
+    return {"batch_id": b["id"], "name": b["name"], "task": s["next"], "link": s["next_link"],
+            "og": round(s["og"], 3) if s["og"] else None, "abv": round(s["abv"], 1) if "abv" in s else None,
+            "last_sg": round(last["sg_c"], 3) if last else None, "last_date": last["taken_on"] if last else None}
+
+
+@app.get("/api/tasks")
+def api_tasks():
+    """Next action per active batch, for the Discord bot. `due` is false for a gravity re-check
+    whose last reading is under a week old — nothing to do yet."""
+    out = []
+    with db() as con:
+        for b in con.execute("SELECT * FROM batch WHERE status IN ('primary', 'secondary', 'aging') ORDER BY id"):
+            s = stats(con, b)
+            if not s["next"]:
+                continue
+            t = summary(b, s)
+            t["due"] = not (s["next"].startswith("Fermenting") and t["last_date"]
+                            and (date.today() - date.fromisoformat(t["last_date"])).days < 7)
+            out.append(t)
+    return out
+
+
+@app.get("/api/batch/{bid}")
+def api_batch(bid: int):
+    with db() as con:
+        b = get_batch(con, bid)
+        return summary(b, stats(con, b))
+
+
 @app.get("/calc")
 def calc(request: Request):
     q = {k: v for k, v in request.query_params.items() if v != ""}

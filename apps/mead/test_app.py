@@ -1,3 +1,4 @@
+from pytest import approx
 import os
 import tempfile
 
@@ -64,3 +65,18 @@ def test_seed_upgrade_no_duplicates_and_deletes_stick():
     con.execute("DELETE FROM batch WHERE name='Bochet (5 gal)'")
     seed.run(con)
     assert con.execute(count).fetchone()[0] == 13
+
+
+def test_api_tasks_due():
+    from datetime import date, timedelta
+    bid = int(c.post("/batch", data={"name": "api-check"}).url.path.split("/")[-1])
+    c.post(f"/batch/{bid}", data={"name": "api-check", "status": "secondary", "volume_gal": "1", "n_need": "low",
+                                  "nutrient_protocol": "recipe", "start_date": "2026-09-11"})
+    c.post(f"/batch/{bid}/reading", data={"taken_on": "2026-09-11", "sg": "1.120"})
+    t = next(t for t in c.get("/api/tasks").json() if t["batch_id"] == bid)
+    assert t["task"] == "Take a gravity reading" and t["due"]
+    c.post(f"/batch/{bid}/reading", data={"taken_on": date.today().isoformat(), "sg": "1.040"})
+    t = next(t for t in c.get("/api/tasks").json() if t["batch_id"] == bid)
+    assert t["task"].startswith("Fermenting") and not t["due"]  # read today: nothing to do for a week
+    c.post(f"/batch/{bid}/reading", data={"taken_on": (date.today() - timedelta(days=8)).isoformat(), "sg": "1.060"})
+    assert c.get(f"/api/batch/{bid}").json()["last_sg"] == approx(1.040)  # latest by date, not insert order
