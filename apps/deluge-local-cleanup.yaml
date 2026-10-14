@@ -11,6 +11,7 @@ data:
     import sys
     import time
     import urllib.request
+    from datetime import datetime, timezone
 
     try:
         from deluge_client import DelugeRPCClient
@@ -43,6 +44,29 @@ data:
         return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
 
 
+    def file_added_ts(movie):
+        added = ((movie.get("movieFile") or {}).get("dateAdded") or "")[:19]
+        try:
+            return datetime.strptime(added, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            return None
+
+
+    def match_movie(name_norm, completed_ts, movies):
+        """The imported movie this torrent is the source of, or None. Name must
+        start with the title and contain the year (a bare substring match once
+        deleted The Cars albums for the movie "Cars"), and Radarr's file must
+        have been added after the torrent finished - otherwise this is an
+        upgrade grab Radarr hasn't imported yet."""
+        for m in movies:
+            title = norm(m["title"])
+            added = file_added_ts(m)
+            if (title and name_norm.startswith(title + " ") and str(m.get("year")) in name_norm.split()
+                    and added is not None and completed_ts and added >= completed_ts):
+                return m
+        return None
+
+
     def is_imported(movie):
         mf = movie.get("movieFile") or {}
         quality = mf.get("quality", {}).get("quality", {}).get("name", "")
@@ -66,7 +90,7 @@ data:
                 torrents = client.call(
                     "core.get_torrents_status",
                     {},
-                    [b"name", b"is_seed", b"save_path"],
+                    [b"name", b"is_seed", b"save_path", b"completed_time"],
                 )
                 return client, torrents
             except Exception as e:
@@ -81,7 +105,7 @@ data:
     # only consider movies already confirmed at Bluray/Remux/BR-DISK quality --
     # anything still pending shouldn't have its local seed touched even if 100%
     # downloaded, since it may still be mid manual-import.
-    imported_titles = [norm(m["title"]) for m in movies if is_imported(m)]
+    imported = [m for m in movies if is_imported(m)]
 
     try:
         client, torrents = connect_and_get_torrents()
@@ -96,11 +120,11 @@ data:
         if not status.get(b"is_seed"):
             continue
         save_path = (status.get(b"save_path") or b"").decode(errors="replace")
-        if not save_path.startswith("/downloads"):
+        # Radarr-only job: music/books/tv share the same /downloads tree.
+        if save_path.rstrip("/") != "/downloads/complete/movies":
             continue
         name = status.get(b"name", torrent_id).decode(errors="replace")
-        name_norm = norm(name)
-        if not any(title and title in name_norm for title in imported_titles):
+        if not match_movie(norm(name), status.get(b"completed_time"), imported):
             continue
         to_remove[torrent_id.decode()] = name
 
