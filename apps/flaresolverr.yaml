@@ -114,7 +114,7 @@ spec:
                     # Retry only the install: a short DNS blip here failed the
                     # whole run and left the CronJob Degraded in Argo (tars#121).
                     for i in 1 2 3 4 5; do
-                      apk add --no-cache kubectl >/dev/null && break
+                      timeout 120 apk add --no-cache kubectl >/dev/null && break
                       sleep 30
                     done
                     kubectl rollout restart deployment/flaresolverr -n apps
