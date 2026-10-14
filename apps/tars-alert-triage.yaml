@@ -105,7 +105,12 @@ data:
 
     kuma_url = os.environ.get("KUMA_PUSH_URL")
     if kuma_url:
-        subprocess.run(["wget", "-q", "-O-", kuma_url], check=True, timeout=15)
+        # Non-fatal: Kuma already alerts on a missed heartbeat, and failing
+        # here marked a run that triaged fine as Failed (tars#121).
+        try:
+            subprocess.run(["wget", "-q", "-O-", kuma_url], check=True, timeout=15)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            print(f"uptime-kuma heartbeat failed (non-fatal): {e}")
 ---
 apiVersion: batch/v1
 kind: CronJob
