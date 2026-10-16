@@ -4,8 +4,8 @@
 # shell in with:
 #   kubectl exec -it -n apps deploy/claude-code -- claude
 #
-# Pinned to k3s-worker-case (amd64, most headroom) rather than the Pi
-# worker, which is memory-constrained.
+# Pinned to tars (amd64) rather than the Pi worker, which is
+# memory-constrained; k3s-worker-case is reserved for valheim2.
 #
 # /root/.claude.json (auth/session state) lives outside the mounted
 # /root/.claude/ dir by default, so it's symlinked into the PVC on

@@ -14,6 +14,13 @@ spec:
         spec:
           nodeSelector:
             kubernetes.io/hostname: k3s-worker-case
+          # Node is tainted dedicated=valheim2:NoSchedule; this job backs up
+          # valheim2's local-path PVCs there, so it has to tolerate it.
+          tolerations:
+            - key: dedicated
+              operator: Equal
+              value: valheim2
+              effect: NoSchedule
           restartPolicy: OnFailure
           containers:
             - name: backup

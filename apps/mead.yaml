@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: mead-data-pvc
+  name: mead-data-tars
   namespace: apps
 spec:
   accessModes:
@@ -30,10 +30,11 @@ spec:
       labels:
         app: mead
     spec:
-      # amd64 image; this node's local-path storage is in case-worker-appdata-backup.
-      # Moving nodes later strands the local-path PVC: copy mead.db across first.
+      # amd64 image. Moved off k3s-worker-case 2026-10-16 (that VM is now
+      # valheim2-only); mead.db was copied into mead-data-tars first.
+      # Moving nodes again strands the local-path PVC: copy mead.db across first.
       nodeSelector:
-        kubernetes.io/hostname: k3s-worker-case
+        kubernetes.io/hostname: tars
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000
@@ -63,7 +64,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: mead-data-pvc
+            claimName: mead-data-tars
 ---
 apiVersion: v1
 kind: Service
