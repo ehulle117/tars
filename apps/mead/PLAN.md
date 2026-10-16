@@ -103,7 +103,7 @@ Single-user web app on Tars for tracking past, current and planned mead batches 
 - One manual step: after the first push, make the ghcr package public, as done for `tars-adsb-tools`. The cluster has no pull secret.
 
 ### 5. Manifest: `apps/mead.yaml`
-- PVC `mead-data-pvc`: 1Gi, `local-path`.
+- PVC `mead-data-tars`: 1Gi, `local-path`, on tars (was `mead-data-pvc` on k3s-worker-case until 2026-10-16).
 - Deployment `mead`:
   - 1 replica, `Recreate` (SQLite must have only one writer)
   - pinned to the `tars` node

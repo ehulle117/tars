@@ -12,6 +12,9 @@
 # 2026-09-24 -- k3s-worker-case revived at a much smaller size this time
 # (2 vCPU / 6GB, down from the original 4 vCPU / 8GB) since it's now only
 # running this one workload, not the rest of what used to share the node.
+# 2026-10-16: shrunk to 4GB and tainted dedicated=valheim2:NoSchedule so
+# nothing else lands on it (a 6GB VM + uncapped Immich OOM'd `case` after
+# a bad DIMM cut its RAM to 16GB).
 #
 # Same pattern as before: a Tailscale sidecar shares the pod's network
 # namespace, so the tailnet IP for this pod IS the server address.
@@ -98,12 +101,18 @@ spec:
         app: valheim2
     spec:
       serviceAccountName: valheim2-tailscale
-      # k3s-worker-case is a small, dedicated VM (2 vCPU / 6GB) running
-      # only this workload -- local-path PVCs are node-local anyway, but
+      # k3s-worker-case is a small, dedicated VM (2 vCPU / 4GB) running
+      # only this workload (tainted dedicated=valheim2:NoSchedule) --
+      # local-path PVCs are node-local anyway, but
       # pinning explicitly is clearer now that there are 3 worker nodes,
       # including an arm64 Pi that can't run this image at all.
       nodeSelector:
         kubernetes.io/hostname: k3s-worker-case
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: valheim2
+          effect: NoSchedule
       containers:
         - name: valheim
           # lloesche/valheim-server-docker is unmaintained; the project moved
@@ -182,17 +191,16 @@ spec:
           securityContext:
             capabilities:
               add: ["SYS_NICE"]
-          # k3s-worker-case only has 6GB total -- the original 8Gi limit
-          # would let this get OOM-killed by the node itself. Observed live
-          # usage on native Docker was ~2.2GB, so 5Gi limit leaves real
-          # headroom for player spikes plus room for the tailscale sidecar
-          # and k3s/containerd overhead.
+          # k3s-worker-case only has 4GB total (was 6GB until 2026-10-16).
+          # Observed live usage on native Docker was ~2.2GB, so a 3Gi limit
+          # keeps ~0.8GB headroom for player spikes while leaving room for
+          # the tailscale sidecar and k3s/containerd overhead inside 4GB.
           resources:
             requests:
               cpu: 500m
               memory: 2Gi
             limits:
-              memory: 5Gi
+              memory: 3Gi
           volumeMounts:
             - name: config
               mountPath: /config
