@@ -80,3 +80,29 @@ def test_api_tasks_due():
     assert t["task"].startswith("Fermenting") and not t["due"]  # read today: nothing to do for a week
     c.post(f"/batch/{bid}/reading", data={"taken_on": (date.today() - timedelta(days=8)).isoformat(), "sg": "1.060"})
     assert c.get(f"/api/batch/{bid}").json()["last_sg"] == approx(1.040)  # latest by date, not insert order
+
+
+def test_costs_and_inventory():
+    q = lambda sql, *a: main.db().execute(sql, a).fetchone()[0]  # noqa: E731
+    bid = int(c.post("/batch", data={"name": "cost-check"}).url.path.split("/")[-1])
+    c.post(f"/batch/{bid}", data={"name": "cost-check", "status": "planned", "volume_gal": "1", "n_need": "low",
+                                  "nutrient_protocol": "recipe"})
+    c.post("/inventory", data={"kind": "honey", "name": "wildflower", "qty": "12", "unit": "lb", "paid": "48"})
+    iid = q("SELECT id FROM inventory WHERE name='wildflower'")
+    c.post(f"/inventory/{iid}", data={"delta": "12", "paid": "72"})  # restock: (48 + 72) / 24 lb
+    assert q("SELECT unit_cost FROM inventory WHERE id=?", iid) == approx(5.0)
+    assert c.post(f"/batch/{bid}/use", data={"inventory_id": iid, "qty": "25"}).status_code == 400  # only 24 on hand
+    c.post(f"/batch/{bid}/use", data={"inventory_id": iid, "qty": "3"})
+    c.post(f"/batch/{bid}/expense", data={"item": "71B yeast", "amount": "5.04"})
+    assert q("SELECT qty FROM inventory WHERE id=?", iid) == approx(21)
+    page = c.get(f"/batch/{bid}").text
+    assert "$20.04" in page and "$3.97" in page  # total, and per 750 mL bottle (5.05 per gal)
+    assert "$20.04" in c.get("/").text
+    used = q("SELECT id FROM expense WHERE batch_id=? AND inventory_id IS NOT NULL", bid)
+    c.post(f"/batch/{bid}/expense/{used}/delete")  # undo puts the honey back
+    assert q("SELECT qty FROM inventory WHERE id=?", iid) == approx(24)
+    assert "$120.00" in c.get("/inventory").text
+    assert c.post(f"/inventory/{iid}", data={"delta": "-30"}).status_code == 400
+    c.post(f"/inventory/{iid}/delete")
+    c.post(f"/batch/{bid}/delete")  # cascades its expenses
+    assert q("SELECT COUNT(*) FROM expense WHERE batch_id=?", bid) == 0

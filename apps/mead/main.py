@@ -15,6 +15,10 @@ DB = os.environ.get("MEAD_DB", "mead.db")
 STATUSES = ["planned", "primary", "secondary", "aging", "bottled", "archived", "recipe"]
 KINDS = ["honey", "fruit", "water", "nutrient", "acid", "tannin", "spice", "oak", "stabilizer", "other"]
 EVENTS = ["pitch", "nutrient", "degas", "rack", "stabilize", "backsweeten", "bottle", "tasting", "note"]
+INV_KINDS = ["honey", "fruit", "yeast", "nutrient", "acid", "tannin", "spice", "oak", "stabilizer",
+             "packaging", "equipment", "cleaning", "other"]
+UNITS = ["lb", "oz", "kg", "g", "gal", "l", "ml", "tsp", "tbsp", "each"]
+BOTTLES_PER_GAL = 3785.41 / 750
 PROTOCOLS = {"tosna": "TOSNA (Fermaid-O)", "recipe": "As recipe (no checklist)"}
 WIKI = "https://wiki.meadtools.com/en/"
 
@@ -34,6 +38,13 @@ CREATE TABLE IF NOT EXISTS reading (
 CREATE TABLE IF NOT EXISTS event (
   id INTEGER PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES batch ON DELETE CASCADE,
   on_date TEXT NOT NULL, kind TEXT, note TEXT, rating INTEGER);
+CREATE TABLE IF NOT EXISTS inventory (
+  id INTEGER PRIMARY KEY, kind TEXT, name TEXT NOT NULL, qty REAL NOT NULL DEFAULT 0, unit TEXT,
+  unit_cost REAL, notes TEXT);
+CREATE TABLE IF NOT EXISTS expense (
+  id INTEGER PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES batch ON DELETE CASCADE,
+  spent_on TEXT NOT NULL, item TEXT NOT NULL, amount REAL NOT NULL, note TEXT,
+  inventory_id INTEGER REFERENCES inventory ON DELETE SET NULL, qty REAL);
 """
 
 
@@ -76,7 +87,9 @@ def stats(con, b) -> dict:
     og = reads[0]["sg_c"] if reads else (est_og or b["target_og"])
     cur = reads[-1]["sg_c"] if len(reads) > 1 else None
     stable = chem.is_stable([(r["taken_on"], r["sg_c"]) for r in reads])
-    s = {"ings": ings, "reads": reads, "est_og": est_og, "og": og, "cur": cur, "stable": stable,
+    exps = [dict(r) for r in con.execute("SELECT * FROM expense WHERE batch_id=? ORDER BY spent_on, id", (b["id"],))]
+    cost = sum(e["amount"] for e in exps)
+    s = {"ings": ings, "reads": reads, "expenses": exps, "cost": cost, "est_og": est_og, "og": og, "cur": cur, "stable": stable,
          "nutrient_done": kinds.count("nutrient"), "next": None, "next_link": None,
          # sweetness from the real FG only once fermentation is done; until then, the target
          "style_class": chem.style_class(og, cur if cur and (stable or b["status"] in ("aging", "bottled", "archived"))
@@ -88,6 +101,9 @@ def stats(con, b) -> dict:
         s["break"] = chem.sugar_break(og)
         if b["nutrient_protocol"] == "tosna":
             s["tosna"] = chem.tosna(og, b["volume_gal"], b["n_need"] or "medium", bool(b["goferm"]))
+    if cost and b["volume_gal"]:
+        s["cost_gal"] = cost / b["volume_gal"]
+        s["cost_bottle"] = s["cost_gal"] / BOTTLES_PER_GAL
     if b["start_date"]:
         s["days"] = (date.today() - date.fromisoformat(b["start_date"])).days
     s["next"], s["next_link"] = next_action(b, s, kinds)
@@ -156,7 +172,8 @@ def batch_view(request: Request, bid: int):
         s = stats(con, b)
         events = con.execute("SELECT * FROM event WHERE batch_id=? ORDER BY on_date, id", (bid,)).fetchall()
     return tpl.TemplateResponse(request, "batch.html", {
-        "b": b, "s": s, "events": events, "statuses": STATUSES, "kinds": KINDS, "event_kinds": EVENTS,
+        "b": b, "s": s, "events": events, "statuses": STATUSES, "kinds": KINDS, "event_kinds": EVENTS, "units": UNITS,
+        "stock": con.execute("SELECT * FROM inventory WHERE qty > 0 ORDER BY kind, name").fetchall(),
         "n_needs": list(chem.N_FACTOR), "protocols": PROTOCOLS, "today": date.today().isoformat()})
 
 
@@ -257,13 +274,91 @@ async def add_event(bid: int, request: Request):
     return back(f"/batch/{bid}")
 
 
+@app.post("/batch/{bid}/expense")
+async def add_expense(bid: int, request: Request):
+    f = await request.form()
+    amount = num(f.get("amount"))
+    if amount is None or amount < 0 or not f.get("item"):
+        raise HTTPException(400, "item and a non-negative amount required")
+    with db() as con:
+        get_batch(con, bid)
+        con.execute("INSERT INTO expense (batch_id, spent_on, item, amount, note) VALUES (?,?,?,?,?)",
+                    (bid, f.get("spent_on") or date.today().isoformat(), f["item"], amount, f.get("note")))
+    return back(f"/batch/{bid}")
+
+
+@app.post("/batch/{bid}/use")
+async def use_stock(bid: int, request: Request):
+    """Take stock off the shelf for a batch: lowers inventory and books its cost as a batch expense."""
+    f = await request.form()
+    qty = num(f.get("qty"))
+    with db() as con:
+        get_batch(con, bid)
+        inv = con.execute("SELECT * FROM inventory WHERE id=?", (num(f.get("inventory_id")),)).fetchone()
+        if not inv or qty is None or not 0 < qty <= inv["qty"]:
+            raise HTTPException(400, "pick an item and a quantity no more than what's on hand")
+        con.execute("UPDATE inventory SET qty = qty - ? WHERE id=?", (qty, inv["id"]))
+        con.execute("INSERT INTO expense (batch_id, spent_on, item, amount, inventory_id, qty) VALUES (?,?,?,?,?,?)",
+                    (bid, f.get("spent_on") or date.today().isoformat(), f"{qty:g} {inv['unit'] or ''} {inv['name']}",
+                     round(qty * (inv["unit_cost"] or 0), 2), inv["id"], qty))
+    return back(f"/batch/{bid}")
+
+
 @app.post("/batch/{bid}/{table}/{rid}/delete")
 def delete_row(bid: int, table: str, rid: int):
-    if table not in ("ingredient", "reading", "event"):  # whitelist: table name is interpolated
+    if table not in ("ingredient", "reading", "event", "expense"):  # whitelist: table name is interpolated
         raise HTTPException(404)
     with db() as con:
+        if table == "expense":  # undoing a "use from inventory" puts the stock back
+            con.execute("""UPDATE inventory SET qty = qty + (SELECT qty FROM expense WHERE id=? AND batch_id=?)
+                           WHERE id = (SELECT inventory_id FROM expense WHERE id=? AND batch_id=?)""", (rid, bid, rid, bid))
         con.execute(f"DELETE FROM {table} WHERE id=? AND batch_id=?", (rid, bid))
     return back(f"/batch/{bid}")
+
+
+@app.get("/inventory")
+def inventory(request: Request):
+    with db() as con:
+        items = con.execute("SELECT * FROM inventory ORDER BY kind, name").fetchall()
+    value = sum(i["qty"] * (i["unit_cost"] or 0) for i in items)
+    return tpl.TemplateResponse(request, "inventory.html", {"items": items, "value": value, "kinds": INV_KINDS,
+                                                            "units": UNITS})
+
+
+@app.post("/inventory")
+async def inventory_add(request: Request):
+    f = await request.form()
+    qty, paid = num(f.get("qty")) or 0, num(f.get("paid"))
+    if not f.get("name") or qty < 0:
+        raise HTTPException(400, "name and a non-negative quantity required")
+    with db() as con:
+        con.execute("INSERT INTO inventory (kind, name, qty, unit, unit_cost, notes) VALUES (?,?,?,?,?,?)",
+                    (f.get("kind"), f["name"], qty, f.get("unit"), paid / qty if paid is not None and qty else None,
+                     f.get("notes")))
+    return back("/inventory")
+
+
+@app.post("/inventory/{iid}")
+async def inventory_adjust(iid: int, request: Request):
+    """Restock (+qty with what you paid: unit cost becomes the weighted average) or correct the count (-qty)."""
+    f = await request.form()
+    delta, paid = num(f.get("delta")), num(f.get("paid"))
+    with db() as con:
+        inv = con.execute("SELECT * FROM inventory WHERE id=?", (iid,)).fetchone()
+        if not inv or delta is None or inv["qty"] + delta < 0:
+            raise HTTPException(400, "can't take out more than what's on hand")
+        cost = inv["unit_cost"]
+        if paid is not None and delta > 0:
+            cost = (inv["qty"] * (cost or paid / delta) + paid) / (inv["qty"] + delta)
+        con.execute("UPDATE inventory SET qty=?, unit_cost=? WHERE id=?", (inv["qty"] + delta, cost, iid))
+    return back("/inventory")
+
+
+@app.post("/inventory/{iid}/delete")
+def inventory_delete(iid: int):
+    with db() as con:
+        con.execute("DELETE FROM inventory WHERE id=?", (iid,))
+    return back("/inventory")
 
 
 def summary(b, s) -> dict:

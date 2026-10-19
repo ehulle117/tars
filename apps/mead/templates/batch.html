@@ -59,7 +59,7 @@
   <label>Kind<select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
   <label>Name<input name="name" placeholder="orange blossom"></label>
   <label>Amount<input name="amount" type="number" step="any" required></label>
-  <label>Unit<select name="unit">{% for u in ["lb","oz","kg","g","gal","l","ml","tsp","tbsp","each"] %}<option>{{ u }}</option>{% endfor %}</select></label>
+  <label>Unit<select name="unit">{% for u in units %}<option>{{ u }}</option>{% endfor %}</select></label>
   <label>PPG<input name="ppg" type="number" step="any" placeholder="honey: 35"></label>
   <label>Added<input name="added_on" type="date"></label>
   <button>Add</button>
@@ -87,6 +87,33 @@
   <button>Add reading</button>
 </form>
 <p class="muted" style="font-size:.85rem">First reading is treated as OG. Temp corrects to a 60°F hydrometer.</p>
+</section>
+
+<section>
+<h2 style="margin-top:0">Costs</h2>
+<p><b class="num">{{ "$%.2f"|format(s.cost) }}</b> total{% if s.cost_gal is defined %} · <span class="num">{{ "$%.2f"|format(s.cost_gal) }}</span>/gal · <span class="num">{{ "$%.2f"|format(s.cost_bottle) }}</span> per 750 mL bottle{% endif %}</p>
+{% if s.expenses %}<div class="scroll"><table>
+  <tr><th>Date</th><th>Item</th><th>Amount</th><th>Note</th><th></th></tr>
+  {% for e in s.expenses %}<tr>
+    <td>{{ e.spent_on }}</td><td class="wrap">{{ e.item }}{% if e.inventory_id %} <span class="badge">from inventory</span>{% endif %}</td>
+    <td class="num">{{ "$%.2f"|format(e.amount) }}</td><td class="wrap">{{ e.note or "" }}</td>
+    <td><form class="inline" method="post" action="/batch/{{ b.id }}/expense/{{ e.id }}/delete"><button class="link" title="Remove{{ ' (returns it to inventory)' if e.inventory_id }}">✕</button></form></td>
+  </tr>{% endfor %}
+</table></div>{% endif %}
+<form class="row" method="post" action="/batch/{{ b.id }}/expense">
+  <label>Date<input name="spent_on" type="date" value="{{ today }}"></label>
+  <label>Item<input name="item" placeholder="15 lb wildflower honey" required></label>
+  <label>Amount $<input name="amount" type="number" step="0.01" min="0" required></label>
+  <label>Note<input name="note"></label>
+  <button>Add cost</button>
+</form>
+{% if stock %}<form class="row" method="post" action="/batch/{{ b.id }}/use">
+  <label>Use from inventory<select name="inventory_id">{% for i in stock %}<option value="{{ i.id }}">{{ i.name }} ({{ i.qty|round(2) }} {{ i.unit or "" }} on hand{% if i.unit_cost %}, ${{ "%.2f"|format(i.unit_cost) }}/{{ i.unit or "unit" }}{% endif %})</option>{% endfor %}</select></label>
+  <label>Qty<input name="qty" type="number" step="any" min="0" required></label>
+  <label>Date<input name="spent_on" type="date" value="{{ today }}"></label>
+  <button>Use</button>
+</form>{% endif %}
+<p class="muted" style="font-size:.85rem">"Use" takes it out of <a href="/inventory">inventory</a> and charges it to this batch at its average cost. Removing that line puts it back.</p>
 </section>
 
 {% if s.tosna %}
