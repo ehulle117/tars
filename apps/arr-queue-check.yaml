@@ -7,6 +7,7 @@ data:
   check.py: |
     import json
     import os
+    import re
     import urllib.request
     from datetime import datetime, timezone
 
@@ -41,6 +42,29 @@ data:
     sections = []
     prowlarr_stale = []
     prowlarr_error = None
+
+    try:
+        statuses = api_get(PROWLARR_HOST, PROWLARR_PORT, "/api/v1/indexerstatus", PROWLARR_KEY)
+        indexers = {i["id"]: i["name"] for i in api_get(PROWLARR_HOST, PROWLARR_PORT, "/api/v1/indexer", PROWLARR_KEY)}
+        for s in statuses:
+            initial = s.get("initialFailure")
+            if not initial:
+                continue
+            days = hours_since(initial) / 24
+            if days >= INDEXER_STALE_DAYS:
+                prowlarr_stale.append({
+                    "name": indexers.get(s["indexerId"], f"id={s['indexerId']}"),
+                    "since": initial[:10],
+                    "days": days,
+                })
+    except Exception as e:
+        prowlarr_error = str(e)
+
+    # The *arr apps reach indexers through Prowlarr with a shorter timeout, so a
+    # slow FlareSolverr/Cloudflare solve (kickass ~70-100s) marks them failed
+    # there for hours while Prowlarr itself is fine. Only report those app-side
+    # warnings if Prowlarr also has one of the named indexers failing long-term.
+    prowlarr_stale_names = {i["name"] for i in prowlarr_stale}
 
     for app in APPS:
         section = {"app": app["name"], "stuck": [], "health": [], "error": None}
@@ -77,25 +101,15 @@ data:
             continue
 
         for h in health:
-            if h.get("type") in ("warning", "error"):
-                section["health"].append({"level": h["type"], "message": h.get("message", "")})
-
-    try:
-        statuses = api_get(PROWLARR_HOST, PROWLARR_PORT, "/api/v1/indexerstatus", PROWLARR_KEY)
-        indexers = {i["id"]: i["name"] for i in api_get(PROWLARR_HOST, PROWLARR_PORT, "/api/v1/indexer", PROWLARR_KEY)}
-        for s in statuses:
-            initial = s.get("initialFailure")
-            if not initial:
+            if h.get("type") not in ("warning", "error"):
                 continue
-            days = hours_since(initial) / 24
-            if days >= INDEXER_STALE_DAYS:
-                prowlarr_stale.append({
-                    "name": indexers.get(s["indexerId"], f"id={s['indexerId']}"),
-                    "since": initial[:10],
-                    "days": days,
-                })
-    except Exception as e:
-        prowlarr_error = str(e)
+            msg = h.get("message", "")
+            if msg.startswith("Indexers unavailable due to failures") and prowlarr_error is None:
+                named = [n.strip() for n in re.findall(r"([^:,]+?) \(Prowlarr\)", msg)]
+                if named and not any(n in prowlarr_stale_names for n in named):
+                    print(f"[{app['name']}] skipping app-side indexer warning (Prowlarr healthy): {msg}")
+                    continue
+            section["health"].append({"level": h["type"], "message": msg})
 
     has_issues = (
         any(s["stuck"] or s["health"] or s["error"] for s in sections)
