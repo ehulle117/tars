@@ -12,12 +12,12 @@ def test_parse_reading():
 
 
 def test_batch_and_done_mapping():
-    msg = bot.task_message({"batch_id": 20, "name": "Green Zinger", "task": "Nutrient dose 2: 1.4 g Fermaid-O (48h)",
+    msg = bot.task_message({"batch_id": 20, "name": "Green Zinger", "task": "Nutrient dose 2: 1.4 g Fermaid-O on Tue Oct 13",
                             "link": None, "last_sg": 1.046, "last_date": "2026-10-13"})
     assert bot.batch_of(msg) == 20 and "1.046 on 2026-10-13" in msg
     assert bot.batch_of("no id here") is None
-    assert bot.done_event("Nutrient dose 2: 1.4 g Fermaid-O (48h)") == "nutrient"
-    assert bot.done_event("Stabilized — wait 24 h, then backsweeten if wanted") == "backsweeten"
+    assert bot.done_event("Nutrient dose 2: 1.4 g Fermaid-O on Tue Oct 13") == "nutrient"
+    assert bot.done_event("Stabilized — backsweeten on or after Wed Oct 22 if wanted") == "backsweeten"
     assert bot.done_event("Stable — stabilize (K-meta + sorbate)") == "stabilize"
     assert bot.done_event("Clear? Bottle or keep aging") == "bottle"
     assert bot.done_event("Stable above target FG — possibly stuck") == "note"

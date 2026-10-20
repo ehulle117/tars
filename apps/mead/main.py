@@ -1,7 +1,7 @@
 """Mead log: FastAPI + stdlib sqlite3 + Jinja templates."""
 import os
 import sqlite3
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -72,6 +72,11 @@ def num(v) -> Optional[float]:
         raise HTTPException(400, f"not a number: {v!r}")
 
 
+def day(d: date) -> str:
+    """'Sat Oct 12', with the year only when it isn't this year."""
+    return d.strftime("%a %b ") + str(d.day) + (d.strftime(", %Y") if d.year != date.today().year else "")
+
+
 def back(path: str):
     return RedirectResponse(path, status_code=303)
 
@@ -82,7 +87,9 @@ def stats(con, b) -> dict:
     reads = [dict(r) for r in con.execute("SELECT * FROM reading WHERE batch_id=? ORDER BY taken_on, id", (b["id"],))]
     for r in reads:
         r["sg_c"] = chem.temp_correct(r["sg"], r["temp_f"]) if r["temp_f"] else r["sg"]
-    kinds = [e[0] for e in con.execute("SELECT kind FROM event WHERE batch_id=? ORDER BY on_date, id", (b["id"],))]
+    evs = con.execute("SELECT kind, on_date FROM event WHERE batch_id=? ORDER BY on_date, id", (b["id"],)).fetchall()
+    kinds = [e[0] for e in evs]
+    stabilized = [e[1] for e in evs if e[0] == "stabilize"]
     est_og = chem.estimate_og(ings, b["volume_gal"] or 0)
     og = reads[0]["sg_c"] if reads else (est_og or b["target_og"])
     cur = reads[-1]["sg_c"] if len(reads) > 1 else None
@@ -101,33 +108,43 @@ def stats(con, b) -> dict:
         s["break"] = chem.sugar_break(og)
         if b["nutrient_protocol"] == "tosna":
             s["tosna"] = chem.tosna(og, b["volume_gal"], b["n_need"] or "medium", bool(b["goferm"]))
+            pitch = date.fromisoformat(b["start_date"]) if b["start_date"] else None
+            for n, d in enumerate(s["tosna"]["doses"]):  # dates from the pitch date, when there is one
+                if not pitch:
+                    d["when"] = "at " + d["when"]
+                elif n < 3:
+                    d["when"] = "on " + day(pitch + timedelta(days=n + 1))
+                else:
+                    d["when"] = f"at the 1/3 break (SG {s['break']:.3f}) or by {day(pitch + timedelta(days=7))}"
     if cost and b["volume_gal"]:
         s["cost_gal"] = cost / b["volume_gal"]
         s["cost_bottle"] = s["cost_gal"] / BOTTLES_PER_GAL
     if b["start_date"]:
         s["days"] = (date.today() - date.fromisoformat(b["start_date"])).days
-    s["next"], s["next_link"] = next_action(b, s, kinds)
+    s["next"], s["next_link"] = next_action(b, s, kinds, stabilized[-1] if stabilized else None)
     return s
 
 
-def next_action(b, s, kinds):
+def next_action(b, s, kinds, stabilized_on=None):
     """One prompt for the dashboard, following the wiki's process."""
     if b["status"] not in ("primary", "secondary", "aging"):
         return None, None
     if s.get("tosna") and s["nutrient_done"] < 4 and b["status"] == "primary":
         d = s["tosna"]["doses"][s["nutrient_done"]]
-        return f"Nutrient dose {s['nutrient_done'] + 1}: {d['g']} g Fermaid-O ({d['when']})", None
+        return f"Nutrient dose {s['nutrient_done'] + 1}: {d['g']} g Fermaid-O {d['when']}", None
     if len(s["reads"]) < 2:
         return "Take a gravity reading", None
     if not s["stable"]:
-        return "Fermenting — re-check gravity in a week", None
+        recheck = date.fromisoformat(s["reads"][-1]["taken_on"]) + timedelta(days=7)
+        return f"Fermenting — re-check gravity on {day(recheck)}", None
     top = b["target_fg_max"] or b["target_fg"]
     if top and s["cur"] > top + 0.002:
         return "Stable above target FG — possibly stuck", WIKI + "protocol/stuck_fermentation"
     if "stabilize" not in kinds:
         return "Stable — stabilize (K-meta + sorbate)", WIKI + "process/stabilization"
     if "backsweeten" not in kinds and "bottle" not in kinds:
-        return "Stabilized — wait 24 h, then backsweeten if wanted", WIKI + "process/back_sweeten"
+        after = f"on or after {day(date.fromisoformat(stabilized_on) + timedelta(days=1))}" if stabilized_on else "after 24 h"
+        return f"Stabilized — backsweeten {after} if wanted", WIKI + "process/back_sweeten"
     return "Clear? Bottle or keep aging", WIKI + "process/packaging"
 
 

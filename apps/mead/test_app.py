@@ -120,3 +120,27 @@ def test_inventory_edit():
     assert c.post(f"/inventory/{iid}/edit", data={"name": "", "qty": "1"}).status_code == 400
     assert c.post(f"/inventory/{iid}/edit", data={"name": "x", "qty": "-1"}).status_code == 400
     assert c.post("/inventory/99999/edit", data={"name": "x", "qty": "1"}).status_code == 404
+
+
+def test_next_steps_have_dates():
+    from datetime import date, timedelta
+    task = lambda bid: c.get(f"/api/batch/{bid}").json()["task"]  # noqa: E731
+    today = date.today()
+    pitch = today - timedelta(days=2)
+    bid = int(c.post("/batch", data={"name": "date-check"}).url.path.split("/")[-1])
+    c.post(f"/batch/{bid}", data={"name": "date-check", "status": "primary", "volume_gal": "1", "n_need": "medium",
+                                  "nutrient_protocol": "tosna", "goferm": "on", "start_date": pitch.isoformat()})
+    c.post(f"/batch/{bid}/reading", data={"taken_on": pitch.isoformat(), "sg": "1.100"})
+    assert task(bid).endswith("on " + main.day(pitch + timedelta(days=1)))  # dose 1: day after pitch
+    for _ in range(3):
+        c.post(f"/batch/{bid}/event", data={"kind": "nutrient"})
+    assert task(bid).endswith("or by " + main.day(pitch + timedelta(days=7)))  # dose 4: break or day 7
+    assert " g on " + main.day(pitch + timedelta(days=3)) + "</li>" in c.get(f"/batch/{bid}").text  # dose 3 on the page
+    c.post(f"/batch/{bid}/event", data={"kind": "nutrient"})
+    c.post(f"/batch/{bid}/reading", data={"taken_on": today.isoformat(), "sg": "1.050"})
+    assert task(bid) == "Fermenting — re-check gravity on " + main.day(today + timedelta(days=7))
+    c.post(f"/batch/{bid}/reading", data={"taken_on": (today + timedelta(days=7)).isoformat(), "sg": "1.010"})
+    c.post(f"/batch/{bid}/reading", data={"taken_on": (today + timedelta(days=14)).isoformat(), "sg": "1.010"})
+    c.post(f"/batch/{bid}/event", data={"kind": "stabilize", "on_date": "2026-01-05"})
+    assert task(bid) == "Stabilized — backsweeten on or after Tue Jan 6" + ("" if today.year == 2026 else ", 2026") + " if wanted"
+    assert main.day(date(today.year, 3, 7)).count(",") == 0 and main.day(date(2020, 3, 7)) == "Sat Mar 7, 2020"

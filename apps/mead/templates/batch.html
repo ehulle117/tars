@@ -121,7 +121,7 @@
 <h2 style="margin-top:0">Nutrients (TOSNA, Fermaid-O)</h2>
 <p class="muted">Target YAN {{ s.tosna.yan_ppm }} ppm · total {{ s.tosna.total_g }} g · {{ s.nutrient_done }} of 4 logged{% if s.tosna.capped %} · capped at the 2.5 g/L Fermaid-O max{% endif %} · <a href="https://wiki.meadtools.com/en/process/nutrient_schedules" target="_blank" rel="noopener">about TOSNA</a></p>
 <ol>{% for d in s.tosna.doses %}
-  <li {% if loop.index0 < s.nutrient_done %}style="text-decoration:line-through" class="muted"{% endif %}>{{ d.g }} g at {{ d.when }}</li>
+  <li {% if loop.index0 < s.nutrient_done %}style="text-decoration:line-through" class="muted"{% endif %}>{{ d.g }} g {{ d.when }}</li>
 {% endfor %}</ol>
 <p class="muted" style="font-size:.85rem">Log each addition as a "nutrient" event below to tick it off.</p>
 </section>
