@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS expense (
   id INTEGER PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES batch ON DELETE CASCADE,
   spent_on TEXT NOT NULL, item TEXT NOT NULL, amount REAL NOT NULL, note TEXT,
   inventory_id INTEGER REFERENCES inventory ON DELETE SET NULL, qty REAL);
+CREATE TABLE IF NOT EXISTS payment (
+  id INTEGER PRIMARY KEY, paid_on TEXT NOT NULL, paid_by TEXT NOT NULL, amount REAL NOT NULL, item TEXT NOT NULL,
+  paid_to TEXT, note TEXT, batch_id INTEGER REFERENCES batch ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, author TEXT, page TEXT, message TEXT NOT NULL,
   done INTEGER NOT NULL DEFAULT 0);
@@ -64,6 +67,37 @@ with db() as _c:
 
 app = FastAPI()
 tpl = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+
+
+def payers() -> list:
+    """Everyone who has paid or been paid back, for the "Paid by" suggestions."""
+    with db() as con:
+        return [r[0] for r in con.execute("SELECT paid_by FROM payment UNION SELECT paid_to FROM payment "
+                                          "WHERE paid_to IS NOT NULL ORDER BY 1")]
+
+
+tpl.env.globals["payers"] = payers
+
+
+def record_payment(con, f, amount, item, batch_id=None):
+    """Book a purchase in the who-paid ledger when the form says who paid."""
+    who = (f.get("paid_by") or "").strip()
+    if who and amount:
+        con.execute("INSERT INTO payment (paid_on, paid_by, amount, item, batch_id) VALUES (?,?,?,?,?)",
+                    (f.get("spent_on") or date.today().isoformat(), who, amount, item, batch_id))
+
+
+def balances(rows) -> dict:
+    """Shared costs split evenly between everyone in the ledger; paying someone back moves money between two
+    people. Positive = is owed, negative = owes."""
+    people = {r["paid_by"] for r in rows} | {r["paid_to"] for r in rows if r["paid_to"]}
+    shared = sum(r["amount"] for r in rows if not r["paid_to"])
+    bal = {p: -shared / len(people) for p in people}
+    for r in rows:
+        bal[r["paid_by"]] += r["amount"]
+        if r["paid_to"]:
+            bal[r["paid_to"]] -= r["amount"]
+    return {p: round(v, 2) for p, v in sorted(bal.items())}
 
 
 def num(v) -> Optional[float]:
@@ -304,6 +338,7 @@ async def add_expense(bid: int, request: Request):
         get_batch(con, bid)
         con.execute("INSERT INTO expense (batch_id, spent_on, item, amount, note) VALUES (?,?,?,?,?)",
                     (bid, f.get("spent_on") or date.today().isoformat(), f["item"], amount, f.get("note")))
+        record_payment(con, f, amount, f["item"], bid)
     return back(f"/batch/{bid}")
 
 
@@ -355,6 +390,7 @@ async def inventory_add(request: Request):
         con.execute("INSERT INTO inventory (kind, name, qty, unit, unit_cost, notes) VALUES (?,?,?,?,?,?)",
                     (f.get("kind"), f["name"], qty, f.get("unit"), paid / qty if paid is not None and qty else None,
                      f.get("notes")))
+        record_payment(con, f, paid, f"{qty:g} {f.get('unit') or ''} {f['name']}")
     return back("/inventory")
 
 
@@ -371,6 +407,8 @@ async def inventory_adjust(iid: int, request: Request):
         if paid is not None and delta > 0:
             cost = (inv["qty"] * (cost or paid / delta) + paid) / (inv["qty"] + delta)
         con.execute("UPDATE inventory SET qty=?, unit_cost=? WHERE id=?", (inv["qty"] + delta, cost, iid))
+        if delta > 0:
+            record_payment(con, f, paid, f"{delta:g} {inv['unit'] or ''} {inv['name']} (restock)")
     return back("/inventory")
 
 
@@ -394,6 +432,38 @@ def inventory_delete(iid: int):
     with db() as con:
         con.execute("DELETE FROM inventory WHERE id=?", (iid,))
     return back("/inventory?edit=1")
+
+
+@app.get("/money")
+def money(request: Request):
+    with db() as con:
+        rows = con.execute("SELECT p.*, b.name AS batch_name FROM payment p LEFT JOIN batch b ON b.id = p.batch_id "
+                           "ORDER BY p.paid_on DESC, p.id DESC").fetchall()
+    bal = balances(rows) if rows else {}
+    spent = sum(r["amount"] for r in rows if not r["paid_to"])
+    return tpl.TemplateResponse(request, "money.html", {"rows": rows, "bal": bal, "spent": spent,
+                                                        "today": date.today().isoformat()})
+
+
+@app.post("/money")
+async def money_add(request: Request):
+    f = await request.form()
+    amount = num(f.get("amount"))
+    who, to = (f.get("paid_by") or "").strip(), (f.get("paid_to") or "").strip() or None
+    if not who or amount is None or amount <= 0 or not (f.get("item") or to) or who == to:
+        raise HTTPException(400, "who paid, what for and a positive amount are required")
+    with db() as con:
+        con.execute("INSERT INTO payment (paid_on, paid_by, amount, item, paid_to, note) VALUES (?,?,?,?,?,?)",
+                    (f.get("paid_on") or date.today().isoformat(), who, amount,
+                     (f.get("item") or "").strip() or "Paid back", to, f.get("note") or None))
+    return back("/money")
+
+
+@app.post("/money/{pid}/delete")
+def money_delete(pid: int):
+    with db() as con:
+        con.execute("DELETE FROM payment WHERE id=?", (pid,))
+    return back("/money")
 
 
 @app.get("/feedback")

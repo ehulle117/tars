@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Who paid · Mead Log{% endblock %}
+{% block body %}
+<h1 style="margin:.25rem 0">Who paid</h1>
+<p class="muted">Shared brewing costs, split evenly between everyone listed. "Paid by" on Inventory and on a batch's Add cost adds purchases here too.</p>
+
+{% if bal %}<section class="stats">
+  <div><small>Spent together</small><b>{{ "$%.2f"|format(spent) }}</b></div>
+  {% for p, v in bal.items() %}<div><small>{{ p }}</small><b>{% if v > 0.005 %}is owed {{ "$%.2f"|format(v) }}{% elif v < -0.005 %}owes {{ "$%.2f"|format(-v) }}{% else %}even{% endif %}</b></div>{% endfor %}
+</section>{% endif %}
+
+<section>
+<h2 style="margin-top:0">Add a payment</h2>
+<form class="row" method="post" action="/money">
+  <label>Date<input name="paid_on" type="date" value="{{ today }}"></label>
+  <label>Paid by<input name="paid_by" list="payers" required size="9"></label>
+  <label>For<input name="item" placeholder="60 lb honey"></label>
+  <label>Amount $<input name="amount" type="number" step="0.01" min="0.01" required></label>
+  <label>Paying back<input name="paid_to" list="payers" placeholder="only if repaying" size="11"></label>
+  <label>Note<input name="note"></label>
+  <button>Add</button>
+</form>
+<p class="muted" style="font-size:.85rem">To settle up, fill in "Paying back" with who got the money (e.g. Gabe paid back Ethan). That moves the balance without counting as a brewing cost.</p>
+</section>
+
+<section class="scroll">
+<table>
+  <tr><th>Date</th><th>Paid by</th><th>For</th><th>Amount</th><th>Note</th><th></th></tr>
+  {% for r in rows %}<tr>
+    <td>{{ r.paid_on }}</td><td>{{ r.paid_by }}</td>
+    <td class="wrap">{% if r.paid_to %}Paid back {{ r.paid_to }}{% if r.item != "Paid back" %}: {{ r.item }}{% endif %}{% else %}{{ r.item }}{% endif %}{% if r.batch_name %} <a class="badge" href="/batch/{{ r.batch_id }}">{{ r.batch_name }}</a>{% endif %}</td>
+    <td class="num">{{ "$%.2f"|format(r.amount) }}</td><td class="wrap">{{ r.note or "" }}</td>
+    <td><form class="inline" method="post" action="/money/{{ r.id }}/delete" onsubmit="return confirm('Remove this payment?')"><button class="link" title="Remove">✕</button></form></td>
+  </tr>{% else %}<tr><td colspan="6" class="muted">No payments yet.</td></tr>{% endfor %}
+</table>
+</section>
+{% endblock %}

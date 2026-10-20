@@ -46,7 +46,8 @@
 {% block head %}{% endblock %}
 </head>
 <body>
-<header><b>🍯 Mead Log</b><a href="/">Batches</a><a href="/recipes">Recipes</a><a href="/inventory">Inventory</a><a href="/calc">Calculators</a><a href="/feedback?from={{ request.url.path|urlencode }}" style="margin-left:auto">Feedback</a></header>
+<header><b>🍯 Mead Log</b><a href="/">Batches</a><a href="/recipes">Recipes</a><a href="/inventory">Inventory</a><a href="/money">Who paid</a><a href="/calc">Calculators</a><a href="/feedback?from={{ request.url.path|urlencode }}" style="margin-left:auto">Feedback</a></header>
 <main>{% block body %}{% endblock %}</main>
+<datalist id="payers">{% for p in payers() %}<option>{{ p }}</option>{% endfor %}</datalist>
 </body>
 </html>

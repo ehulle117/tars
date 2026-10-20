@@ -32,6 +32,7 @@
     <td><form class="inline" method="post" action="/inventory/{{ i.id }}">
       <input name="delta" type="number" step="any" placeholder="±qty" required>
       <input name="paid" type="number" step="0.01" min="0" placeholder="paid $">
+      <input name="paid_by" list="payers" placeholder="paid by" size="7">
       <button>Update</button></form></td>
   </tr>{% else %}<tr><td colspan="6" class="muted">Nothing tracked yet — add what's on your shelf below.</td></tr>{% endfor %}
 {% endif %}
@@ -46,6 +47,7 @@
   <label>Qty<input name="qty" type="number" step="any" min="0" required></label>
   <label>Unit<select name="unit">{% for u in units %}<option>{{ u }}</option>{% endfor %}</select></label>
   <label>Paid $ (total)<input name="paid" type="number" step="0.01" min="0"></label>
+  <label>Paid by<input name="paid_by" list="payers" placeholder="optional" size="9"></label>
   <label>Notes<input name="notes" placeholder="where it's stored, lot, best-by…"></label>
   <button>Add</button>
 </form>

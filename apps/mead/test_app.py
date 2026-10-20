@@ -160,3 +160,27 @@ def test_feedback():
     assert "Sort by kind please" in page and "&lt;b&gt;hi&lt;/b&gt;" in page  # escaped
     c.post(f"/feedback/{rows[0][0]}/toggle")
     assert main.db().execute("SELECT done FROM feedback WHERE id=?", (rows[0][0],)).fetchone()[0] == 1
+
+
+def test_who_paid():
+    q = lambda sql, *a: main.db().execute(sql, a).fetchall()  # noqa: E731
+    main.db().execute("DELETE FROM payment").connection.commit()
+    bid = int(c.post("/batch", data={"name": "money-check"}).url.path.split("/")[-1])
+    c.post("/inventory", data={"kind": "honey", "name": "buckwheat", "qty": "10", "unit": "lb", "paid": "60",
+                               "paid_by": "Ethan"})
+    iid = q("SELECT id FROM inventory WHERE name='buckwheat'")[0][0]
+    c.post(f"/inventory/{iid}", data={"delta": "5", "paid": "30", "paid_by": "Gabe"})  # restock
+    c.post(f"/inventory/{iid}", data={"delta": "-1", "paid_by": "Gabe"})  # a correction isn't a payment
+    c.post(f"/batch/{bid}/expense", data={"item": "spices", "amount": "10", "paid_by": "Gabe"})
+    c.post(f"/batch/{bid}/expense", data={"item": "no payer", "amount": "5"})  # paid_by is optional
+    c.post(f"/batch/{bid}/use", data={"inventory_id": iid, "qty": "2"})  # using stock isn't a payment
+    rows = q("SELECT paid_by, amount, item, batch_id FROM payment ORDER BY id")
+    assert [tuple(r) for r in rows] == [("Ethan", 60, "10 lb buckwheat", None), ("Gabe", 30, "5 lb buckwheat (restock)", None),
+                                        ("Gabe", 10, "spices", bid)]
+    page = c.get("/money").text  # $100 shared: $50 each; Ethan paid 60, Gabe 40
+    assert "$100.00" in page and "is owed $10.00" in page and "owes $10.00" in page
+    assert c.post("/money", data={"paid_by": "Gabe", "paid_to": "Gabe", "amount": "10"}).status_code == 400
+    c.post("/money", data={"paid_by": "Gabe", "paid_to": "Ethan", "amount": "10"})  # settle up
+    page = c.get("/money").text
+    assert "$100.00" in page and page.count(">even<") == 2 and "Paid back Ethan" in page
+    assert '<option>Gabe</option>' in c.get("/inventory").text  # suggestions on other pages
