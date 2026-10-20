@@ -106,3 +106,15 @@ def test_costs_and_inventory():
     c.post(f"/inventory/{iid}/delete")
     c.post(f"/batch/{bid}/delete")  # cascades its expenses
     assert q("SELECT COUNT(*) FROM expense WHERE batch_id=?", bid) == 0
+
+
+def test_inventory_edit():
+    c.post("/inventory", data={"kind": "honey", "name": "clover", "qty": "5", "unit": "lb", "paid": "20"})
+    iid = main.db().execute("SELECT id FROM inventory WHERE name='clover'").fetchone()[0]
+    c.post(f"/inventory/{iid}/edit", data={"kind": "fruit", "name": "cherries", "qty": "2.5", "unit": "kg",
+                                           "unit_cost": "6", "notes": "freezer"})
+    row = main.db().execute("SELECT kind, name, qty, unit, unit_cost, notes FROM inventory WHERE id=?", (iid,)).fetchone()
+    assert tuple(row) == ("fruit", "cherries", 2.5, "kg", 6.0, "freezer")
+    assert c.post(f"/inventory/{iid}/edit", data={"name": "", "qty": "1"}).status_code == 400
+    assert c.post(f"/inventory/{iid}/edit", data={"name": "x", "qty": "-1"}).status_code == 400
+    assert c.post("/inventory/99999/edit", data={"name": "x", "qty": "1"}).status_code == 404

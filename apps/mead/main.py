@@ -354,6 +354,21 @@ async def inventory_adjust(iid: int, request: Request):
     return back("/inventory")
 
 
+@app.post("/inventory/{iid}/edit")
+async def inventory_edit(iid: int, request: Request):
+    """Set every field directly, e.g. to fix a typo or a miscounted shelf."""
+    f = await request.form()
+    qty, cost = num(f.get("qty")), num(f.get("unit_cost"))
+    if not f.get("name") or qty is None or qty < 0 or (cost is not None and cost < 0):
+        raise HTTPException(400, "name and a non-negative quantity required; unit cost can't be negative")
+    with db() as con:
+        cur = con.execute("UPDATE inventory SET kind=?, name=?, qty=?, unit=?, unit_cost=?, notes=? WHERE id=?",
+                          (f.get("kind"), f["name"], qty, f.get("unit"), cost, f.get("notes") or None, iid))
+        if not cur.rowcount:
+            raise HTTPException(404)
+    return back("/inventory")
+
+
 @app.post("/inventory/{iid}/delete")
 def inventory_delete(iid: int):
     with db() as con:
