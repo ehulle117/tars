@@ -97,7 +97,7 @@ def stats(con, b) -> dict:
     exps = [dict(r) for r in con.execute("SELECT * FROM expense WHERE batch_id=? ORDER BY spent_on, id", (b["id"],))]
     cost = sum(e["amount"] for e in exps)
     s = {"ings": ings, "reads": reads, "expenses": exps, "cost": cost, "est_og": est_og, "og": og, "cur": cur, "stable": stable,
-         "nutrient_done": kinds.count("nutrient"), "next": None, "next_link": None,
+         "nutrient_done": kinds.count("nutrient"), "state": None, "next": None, "next_link": None,
          # sweetness from the real FG only once fermentation is done; until then, the target
          "style_class": chem.style_class(og, cur if cur and (stable or b["status"] in ("aging", "bottled", "archived"))
                                          else b["target_fg"])}
@@ -121,31 +121,31 @@ def stats(con, b) -> dict:
         s["cost_bottle"] = s["cost_gal"] / BOTTLES_PER_GAL
     if b["start_date"]:
         s["days"] = (date.today() - date.fromisoformat(b["start_date"])).days
-    s["next"], s["next_link"] = next_action(b, s, kinds, stabilized[-1] if stabilized else None)
+    s["state"], s["next"], s["next_link"] = next_action(b, s, kinds, stabilized[-1] if stabilized else None)
     return s
 
 
 def next_action(b, s, kinds, stabilized_on=None):
-    """One prompt for the dashboard, following the wiki's process."""
+    """(where the batch is, what to do next, guide link), following the wiki's process."""
     if b["status"] not in ("primary", "secondary", "aging"):
-        return None, None
+        return None, None, None
     if s.get("tosna") and s["nutrient_done"] < 4 and b["status"] == "primary":
         d = s["tosna"]["doses"][s["nutrient_done"]]
-        return f"Nutrient dose {s['nutrient_done'] + 1}: {d['g']} g Fermaid-O {d['when']}", None
+        return "Fermenting", f"Nutrient dose {s['nutrient_done'] + 1}: {d['g']} g Fermaid-O {d['when']}", None
     if len(s["reads"]) < 2:
-        return "Take a gravity reading", None
+        return "Just pitched", "Take a gravity reading", None
     if not s["stable"]:
         recheck = date.fromisoformat(s["reads"][-1]["taken_on"]) + timedelta(days=7)
-        return f"Fermenting — re-check gravity on {day(recheck)}", None
+        return "Fermenting", f"Re-check gravity on {day(recheck)}", None
     top = b["target_fg_max"] or b["target_fg"]
     if top and s["cur"] > top + 0.002:
-        return "Stable above target FG — possibly stuck", WIKI + "protocol/stuck_fermentation"
+        return "Possibly stuck", "Stable above target FG: check for a stuck fermentation", WIKI + "protocol/stuck_fermentation"
     if "stabilize" not in kinds:
-        return "Stable — stabilize (K-meta + sorbate)", WIKI + "process/stabilization"
+        return "Stable", "Stabilize (K-meta + sorbate)", WIKI + "process/stabilization"
     if "backsweeten" not in kinds and "bottle" not in kinds:
         after = f"on or after {day(date.fromisoformat(stabilized_on) + timedelta(days=1))}" if stabilized_on else "after 24 h"
-        return f"Stabilized — backsweeten {after} if wanted", WIKI + "process/back_sweeten"
-    return "Clear? Bottle or keep aging", WIKI + "process/packaging"
+        return "Stabilized", f"Backsweeten {after} if wanted", WIKI + "process/back_sweeten"
+    return "Aging", "Bottle when clear, or keep aging", WIKI + "process/packaging"
 
 
 @app.get("/")
@@ -395,7 +395,7 @@ def inventory_delete(iid: int):
 
 def summary(b, s) -> dict:
     last = s["reads"][-1] if s["reads"] else None
-    return {"batch_id": b["id"], "name": b["name"], "task": s["next"], "link": s["next_link"],
+    return {"batch_id": b["id"], "name": b["name"], "task": s["next"] and f"{s['state']} — {s['next']}", "link": s["next_link"],
             "og": round(s["og"], 3) if s["og"] else None, "abv": round(s["abv"], 1) if "abv" in s else None,
             "last_sg": round(last["sg_c"], 3) if last else None, "last_date": last["taken_on"] if last else None}
 
@@ -411,7 +411,7 @@ def api_tasks():
             if not s["next"]:
                 continue
             t = summary(b, s)
-            t["due"] = not (s["next"].startswith("Fermenting") and t["last_date"]
+            t["due"] = not (s["next"].startswith("Re-check gravity") and t["last_date"]
                             and (date.today() - date.fromisoformat(t["last_date"])).days < 7)
             out.append(t)
     return out

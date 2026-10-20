@@ -5,7 +5,7 @@
 <h1 style="margin:.25rem 0">{{ b.name }} <span class="muted" style="font-size:1rem">{{ b.status }}</span>{% if s.style_class %} <span class="badge">{{ s.style_class }}</span>{% endif %}</h1>
 {% if b.source_url %}<p class="muted">Source: <a href="{{ b.source_url }}" target="_blank" rel="noopener">{{ b.source_url }}</a></p>{% endif %}
 {% if b.status == "recipe" %}<form method="post" action="/batch/{{ b.id }}/clone"><button>Brew this →</button> <span class="muted">copies it into a planned batch</span></form>{% endif %}
-{% if s.next %}<p class="next">→ {% if s.next_link %}<a href="{{ s.next_link }}" target="_blank" rel="noopener">{{ s.next }}</a>{% else %}{{ s.next }}{% endif %}</p>{% endif %}
+{% if s.next %}<p class="next"><span class="badge">{{ s.state }}</span> → {% if s.next_link %}<a href="{{ s.next_link }}" target="_blank" rel="noopener">{{ s.next }}</a>{% else %}{{ s.next }}{% endif %}</p>{% endif %}
 
 <section class="stats">
   <div><small>OG{% if s.reads %} (measured){% elif s.est_og %} (est.){% else %} (target){% endif %}</small><b>{{ "%.3f"|format(s.og) if s.og else "—" }}</b></div>

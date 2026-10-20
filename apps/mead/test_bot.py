@@ -17,7 +17,8 @@ def test_batch_and_done_mapping():
     assert bot.batch_of(msg) == 20 and "1.046 on 2026-10-13" in msg
     assert bot.batch_of("no id here") is None
     assert bot.done_event("Nutrient dose 2: 1.4 g Fermaid-O on Tue Oct 13") == "nutrient"
-    assert bot.done_event("Stabilized — backsweeten on or after Wed Oct 22 if wanted") == "backsweeten"
-    assert bot.done_event("Stable — stabilize (K-meta + sorbate)") == "stabilize"
-    assert bot.done_event("Clear? Bottle or keep aging") == "bottle"
-    assert bot.done_event("Stable above target FG — possibly stuck") == "note"
+    assert bot.done_event("Stabilized — Backsweeten on or after Wed Oct 22 if wanted") == "backsweeten"
+    assert bot.done_event("Stable — Stabilize (K-meta + sorbate)") == "stabilize"
+    assert bot.done_event("Aging — Bottle when clear, or keep aging") == "bottle"
+    assert bot.done_event("Possibly stuck — Stable above target FG: check for a stuck fermentation") == "note"
+    assert bot.done_event("Fermenting — Re-check gravity on Tue Oct 20") == "note"

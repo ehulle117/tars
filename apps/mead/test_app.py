@@ -26,10 +26,10 @@ def test_recipe_to_batch_flow():
     for _ in range(4):
         c.post(f"/batch/{bid}/event", data={"kind": "nutrient"})
     c.post(f"/batch/{bid}/reading", data={"taken_on": "2026-10-05", "sg": "1.050"})
-    assert "re-check gravity" in c.get("/").text
+    assert "Re-check gravity on" in c.get("/").text and "<td>Fermenting</td>" in c.get("/").text
     c.post(f"/batch/{bid}/reading", data={"taken_on": "2026-10-12", "sg": "1.040"})
     c.post(f"/batch/{bid}/reading", data={"taken_on": "2026-10-19", "sg": "1.040"})
-    assert "possibly stuck" in c.get("/").text
+    assert "<td>Possibly stuck</td>" in c.get("/").text and "check for a stuck fermentation" in c.get("/").text
     c.post(f"/batch/{bid}/save-recipe")
     assert c.get("/recipes").text.count("Basic Traditional") == 2
 
@@ -74,7 +74,7 @@ def test_api_tasks_due():
                                   "nutrient_protocol": "recipe", "start_date": "2026-09-11"})
     c.post(f"/batch/{bid}/reading", data={"taken_on": "2026-09-11", "sg": "1.120"})
     t = next(t for t in c.get("/api/tasks").json() if t["batch_id"] == bid)
-    assert t["task"] == "Take a gravity reading" and t["due"]
+    assert t["task"] == "Just pitched — Take a gravity reading" and t["due"]
     c.post(f"/batch/{bid}/reading", data={"taken_on": date.today().isoformat(), "sg": "1.040"})
     t = next(t for t in c.get("/api/tasks").json() if t["batch_id"] == bid)
     assert t["task"].startswith("Fermenting") and not t["due"]  # read today: nothing to do for a week
@@ -131,16 +131,18 @@ def test_next_steps_have_dates():
     c.post(f"/batch/{bid}", data={"name": "date-check", "status": "primary", "volume_gal": "1", "n_need": "medium",
                                   "nutrient_protocol": "tosna", "goferm": "on", "start_date": pitch.isoformat()})
     c.post(f"/batch/{bid}/reading", data={"taken_on": pitch.isoformat(), "sg": "1.100"})
-    assert task(bid).endswith("on " + main.day(pitch + timedelta(days=1)))  # dose 1: day after pitch
+    assert task(bid) == "Fermenting — Nutrient dose 1: 1.4 g Fermaid-O on " + main.day(pitch + timedelta(days=1))
+    t = next(t for t in c.get("/api/tasks").json() if t["batch_id"] == bid)
+    assert t["due"]  # a nutrient dose is due even with a fresh reading
     for _ in range(3):
         c.post(f"/batch/{bid}/event", data={"kind": "nutrient"})
     assert task(bid).endswith("or by " + main.day(pitch + timedelta(days=7)))  # dose 4: break or day 7
     assert " g on " + main.day(pitch + timedelta(days=3)) + "</li>" in c.get(f"/batch/{bid}").text  # dose 3 on the page
     c.post(f"/batch/{bid}/event", data={"kind": "nutrient"})
     c.post(f"/batch/{bid}/reading", data={"taken_on": today.isoformat(), "sg": "1.050"})
-    assert task(bid) == "Fermenting — re-check gravity on " + main.day(today + timedelta(days=7))
+    assert task(bid) == "Fermenting — Re-check gravity on " + main.day(today + timedelta(days=7))
     c.post(f"/batch/{bid}/reading", data={"taken_on": (today + timedelta(days=7)).isoformat(), "sg": "1.010"})
     c.post(f"/batch/{bid}/reading", data={"taken_on": (today + timedelta(days=14)).isoformat(), "sg": "1.010"})
     c.post(f"/batch/{bid}/event", data={"kind": "stabilize", "on_date": "2026-01-05"})
-    assert task(bid) == "Stabilized — backsweeten on or after Tue Jan 6" + ("" if today.year == 2026 else ", 2026") + " if wanted"
+    assert task(bid) == "Stabilized — Backsweeten on or after Tue Jan 6" + ("" if today.year == 2026 else ", 2026") + " if wanted"
     assert main.day(date(today.year, 3, 7)).count(",") == 0 and main.day(date(2020, 3, 7)) == "Sat Mar 7, 2020"
