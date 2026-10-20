@@ -113,8 +113,10 @@ spec:
             # http://homebrew:8770 reaches the app with no root or NET_ADMIN.
             - name: TS_USERSPACE
               value: "true"
+            # tag:game is the tag the valheim nodes already use, so the policy
+            # needs no new tagOwners entry.
             - name: TS_EXTRA_ARGS
-              value: "--advertise-tags=tag:homebrew"
+              value: "--advertise-tags=tag:game"
           resources:
             requests:
               cpu: 10m

@@ -9,30 +9,29 @@ The app has no login, so anyone it's shared with can add, edit and delete everyt
 
 ## Setup (once, in this order: the pod won't start until step 3 is done)
 
-### 1. Policy: allow the tag and the port
+### 1. Policy: allow the port
 
-In the admin console under **Access controls**, add:
+The sidecar uses `tag:game`, which the valheim nodes already use, so `tagOwners` needs no
+change. In the admin console under **Access controls**, add one grant:
 
 ```jsonc
-"tagOwners": {
-  "tag:homebrew": ["autogroup:admin"],
-},
 "grants": [
   {
     "src": ["autogroup:shared"],   // people a device is shared with
-    "dst": ["tag:homebrew"],
+    "dst": ["tag:game"],
     "ip":  ["tcp:8770"],
   },
 ],
 ```
 
-If your policy doesn't already let your own devices reach tagged devices, add your user
-to `src` too.
+Sharing is still per device: Gabe reaches only what's shared with him, so this doesn't
+open anything on the valheim servers to him (and nothing listens on 8770 there).
 
 ### 2. Auth key
 
-**Settings → Keys → Generate auth key**: not reusable, **pre-approved**, tagged
-`tag:homebrew`. Tagged devices don't expire, so no key-expiry step is needed.
+**Settings → Keys → Generate auth key**: not reusable, **pre-approved**. A plain
+untagged key works, same as valheim: the sidecar asks for `tag:game` itself. Tagged
+devices don't expire, so no key-expiry step is needed.
 
 ### 3. Secret
 
