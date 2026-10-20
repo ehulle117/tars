@@ -4,11 +4,34 @@
 <h1 style="margin:.25rem 0">Who paid</h1>
 <p class="muted">Shared brewing costs, split evenly between everyone listed. "Paid by" on Inventory and on a batch's Add cost adds purchases here too.</p>
 
-{% if bal %}<section class="stats">
+{% if rows %}<section class="stats">
   <div><small>Spent together</small><b>{{ "$%.2f"|format(spent) }}</b></div>
+  {% if unassigned %}<div><small>Unassigned (not split yet)</small><b>{{ "$%.2f"|format(unassigned) }}</b></div>{% endif %}
   {% for p, v in bal.items() %}<div><small>{{ p }}</small><b>{% if v > 0.005 %}is owed {{ "$%.2f"|format(v) }}{% elif v < -0.005 %}owes {{ "$%.2f"|format(-v) }}{% else %}even{% endif %}</b></div>{% endfor %}
 </section>{% endif %}
 
+{% if editing %}
+<form method="post" action="/money/save">
+<div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 .5rem">
+  <span class="muted">Editing — nothing is saved until you press Save &amp; done.</span>
+  <span><a href="/money">Cancel</a> <button>Save &amp; done</button></span>
+</div>
+<section class="scroll">
+<table>
+  <tr><th>Date</th><th>Paid by</th><th>For</th><th>Amount $</th><th>Paying back</th><th>Note</th><th>Remove</th></tr>
+  {% for r in rows %}<tr>
+    <td><input name="paid_on-{{ r.id }}" type="date" value="{{ r.paid_on }}" required></td>
+    <td><input name="paid_by-{{ r.id }}" list="payers" value="{{ r.paid_by }}" size="8" placeholder="who?"></td>
+    <td><input name="item-{{ r.id }}" value="{{ r.item }}" required size="24"></td>
+    <td><input name="amount-{{ r.id }}" type="number" step="0.01" min="0.01" value="{{ '%.2f'|format(r.amount) }}" required></td>
+    <td><input name="paid_to-{{ r.id }}" list="payers" value="{{ r.paid_to or '' }}" size="8"></td>
+    <td><input name="note-{{ r.id }}" value="{{ r.note or '' }}" size="12"></td>
+    <td><input type="checkbox" name="remove-{{ r.id }}" title="Remove on save"></td>
+  </tr>{% endfor %}
+</table>
+</section>
+</form>
+{% else %}
 <section>
 <h2 style="margin-top:0">Add a payment</h2>
 <form class="row" method="post" action="/money">
@@ -23,15 +46,18 @@
 <p class="muted" style="font-size:.85rem">To settle up, fill in "Paying back" with who got the money (e.g. Gabe paid back Ethan). That moves the balance without counting as a brewing cost.</p>
 </section>
 
+<form class="row" method="get" action="/money" style="justify-content:flex-end;margin:0 0 .5rem">
+  {% if rows %}<input type="hidden" name="edit" value="1"><button>Edit</button>{% endif %}
+</form>
 <section class="scroll">
 <table>
-  <tr><th>Date</th><th>Paid by</th><th>For</th><th>Amount</th><th>Note</th><th></th></tr>
+  <tr><th>Date</th><th>Paid by</th><th>For</th><th>Amount</th><th>Note</th></tr>
   {% for r in rows %}<tr>
-    <td>{{ r.paid_on }}</td><td>{{ r.paid_by }}</td>
+    <td>{{ r.paid_on }}</td><td>{{ r.paid_by or "—" }}</td>
     <td class="wrap">{% if r.paid_to %}Paid back {{ r.paid_to }}{% if r.item != "Paid back" %}: {{ r.item }}{% endif %}{% else %}{{ r.item }}{% endif %}{% if r.batch_name %} <a class="badge" href="/batch/{{ r.batch_id }}">{{ r.batch_name }}</a>{% endif %}</td>
     <td class="num">{{ "$%.2f"|format(r.amount) }}</td><td class="wrap">{{ r.note or "" }}</td>
-    <td><form class="inline" method="post" action="/money/{{ r.id }}/delete" onsubmit="return confirm('Remove this payment?')"><button class="link" title="Remove">✕</button></form></td>
-  </tr>{% else %}<tr><td colspan="6" class="muted">No payments yet.</td></tr>{% endfor %}
+  </tr>{% else %}<tr><td colspan="5" class="muted">No payments yet.</td></tr>{% endfor %}
 </table>
 </section>
+{% endif %}
 {% endblock %}

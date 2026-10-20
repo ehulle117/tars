@@ -72,8 +72,8 @@ tpl = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templat
 def payers() -> list:
     """Everyone who has paid or been paid back, for the "Paid by" suggestions."""
     with db() as con:
-        return [r[0] for r in con.execute("SELECT paid_by FROM payment UNION SELECT paid_to FROM payment "
-                                          "WHERE paid_to IS NOT NULL ORDER BY 1")]
+        return [r[0] for r in con.execute("SELECT paid_by FROM payment WHERE paid_by != '' UNION SELECT paid_to "
+                                          "FROM payment WHERE paid_to IS NOT NULL ORDER BY 1")]
 
 
 tpl.env.globals["payers"] = payers
@@ -89,8 +89,11 @@ def record_payment(con, f, amount, item, batch_id=None):
 
 def balances(rows) -> dict:
     """Shared costs split evenly between everyone in the ledger; paying someone back moves money between two
-    people. Positive = is owed, negative = owes."""
+    people. Positive = is owed, negative = owes. Unassigned purchases (no payer yet) wait until someone's named."""
+    rows = [r for r in rows if r["paid_by"]]
     people = {r["paid_by"] for r in rows} | {r["paid_to"] for r in rows if r["paid_to"]}
+    if not people:
+        return {}
     shared = sum(r["amount"] for r in rows if not r["paid_to"])
     bal = {p: -shared / len(people) for p in people}
     for r in rows:
@@ -394,7 +397,7 @@ async def inventory_add(request: Request):
     return back("/inventory")
 
 
-@app.post("/inventory/{iid}")
+@app.post("/inventory/{iid:int}")  # :int, so /inventory/save isn't taken for an id
 async def inventory_adjust(iid: int, request: Request):
     """Restock (+qty with what you paid: unit cost becomes the weighted average) or correct the count (-qty)."""
     f = await request.form()
@@ -412,26 +415,28 @@ async def inventory_adjust(iid: int, request: Request):
     return back("/inventory")
 
 
-@app.post("/inventory/{iid}/edit")
-async def inventory_edit(iid: int, request: Request):
-    """Set every field directly, e.g. to fix a typo or a miscounted shelf."""
+def edited_rows(f, fields) -> dict:
+    """Edit-mode forms name each input `field-<row id>`; regroup them as {row id: {field: value}}."""
+    ids = {k.split("-", 1)[1] for k in f.keys() if k.startswith(fields[0] + "-")}
+    return {int(i): {fld: f.get(f"{fld}-{i}") for fld in fields + ["remove"]} for i in ids if i.isdigit()}
+
+
+@app.post("/inventory/save")
+async def inventory_save(request: Request):
+    """Edit mode's Save & done: every row at once, all or nothing."""
     f = await request.form()
-    qty, cost = num(f.get("qty")), num(f.get("unit_cost"))
-    if not f.get("name") or qty is None or qty < 0 or (cost is not None and cost < 0):
-        raise HTTPException(400, "name and a non-negative quantity required; unit cost can't be negative")
-    with db() as con:
-        cur = con.execute("UPDATE inventory SET kind=?, name=?, qty=?, unit=?, unit_cost=?, notes=? WHERE id=?",
-                          (f.get("kind"), f["name"], qty, f.get("unit"), cost, f.get("notes") or None, iid))
-        if not cur.rowcount:
-            raise HTTPException(404)
-    return back("/inventory?edit=1")
-
-
-@app.post("/inventory/{iid}/delete")
-def inventory_delete(iid: int):
-    with db() as con:
-        con.execute("DELETE FROM inventory WHERE id=?", (iid,))
-    return back("/inventory?edit=1")
+    with db() as con:  # an HTTPException inside rolls the whole save back
+        for iid, r in edited_rows(f, ["name", "kind", "qty", "unit", "unit_cost", "notes"]).items():
+            if r["remove"]:
+                con.execute("DELETE FROM inventory WHERE id=?", (iid,))
+                continue
+            qty, cost = num(r["qty"]), num(r["unit_cost"])
+            if not (r["name"] or "").strip() or qty is None or qty < 0 or (cost is not None and cost < 0):
+                raise HTTPException(400, f"{r['name'] or 'a row'}: needs a name and a non-negative quantity; "
+                                         "unit cost can't be negative. Nothing was saved.")
+            con.execute("UPDATE inventory SET kind=?, name=?, qty=?, unit=?, unit_cost=?, notes=? WHERE id=?",
+                        (r["kind"], r["name"].strip(), qty, r["unit"], cost, r["notes"] or None, iid))
+    return back("/inventory")
 
 
 @app.get("/money")
@@ -439,10 +444,11 @@ def money(request: Request):
     with db() as con:
         rows = con.execute("SELECT p.*, b.name AS batch_name FROM payment p LEFT JOIN batch b ON b.id = p.batch_id "
                            "ORDER BY p.paid_on DESC, p.id DESC").fetchall()
-    bal = balances(rows) if rows else {}
     spent = sum(r["amount"] for r in rows if not r["paid_to"])
-    return tpl.TemplateResponse(request, "money.html", {"rows": rows, "bal": bal, "spent": spent,
-                                                        "today": date.today().isoformat()})
+    unassigned = sum(r["amount"] for r in rows if not r["paid_by"])
+    return tpl.TemplateResponse(request, "money.html", {
+        "rows": rows, "bal": balances(rows), "spent": spent, "unassigned": unassigned,
+        "editing": "edit" in request.query_params, "today": date.today().isoformat()})
 
 
 @app.post("/money")
@@ -459,10 +465,22 @@ async def money_add(request: Request):
     return back("/money")
 
 
-@app.post("/money/{pid}/delete")
-def money_delete(pid: int):
-    with db() as con:
-        con.execute("DELETE FROM payment WHERE id=?", (pid,))
+@app.post("/money/save")
+async def money_save(request: Request):
+    """Edit mode's Save & done: every row at once, all or nothing."""
+    f = await request.form()
+    with db() as con:  # an HTTPException inside rolls the whole save back
+        for pid, r in edited_rows(f, ["item", "paid_on", "paid_by", "amount", "paid_to", "note"]).items():
+            if r["remove"]:
+                con.execute("DELETE FROM payment WHERE id=?", (pid,))
+                continue
+            amount = num(r["amount"])
+            who, to = (r["paid_by"] or "").strip(), (r["paid_to"] or "").strip() or None
+            if amount is None or amount <= 0 or not (r["item"] or "").strip() or not r["paid_on"] or (to and to == who):
+                raise HTTPException(400, f"{r['item'] or 'a row'}: needs a date, what it was for and a positive "
+                                         "amount, and can't pay back the payer. Nothing was saved.")
+            con.execute("UPDATE payment SET paid_on=?, paid_by=?, item=?, amount=?, paid_to=?, note=? WHERE id=?",
+                        (r["paid_on"], who, r["item"].strip(), amount, to, r["note"] or None, pid))
     return back("/money")
 
 

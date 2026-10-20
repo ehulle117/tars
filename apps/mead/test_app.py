@@ -103,24 +103,26 @@ def test_costs_and_inventory():
     assert q("SELECT qty FROM inventory WHERE id=?", iid) == approx(24)
     assert "$120.00" in c.get("/inventory").text
     assert c.post(f"/inventory/{iid}", data={"delta": "-30"}).status_code == 400
-    c.post(f"/inventory/{iid}/delete")
+    c.post("/inventory/save", data={"name-%d" % iid: "x", "qty-%d" % iid: "1", "remove-%d" % iid: "on"})
+    assert not main.db().execute("SELECT 1 FROM inventory WHERE id=?", (iid,)).fetchone()
     c.post(f"/batch/{bid}/delete")  # cascades its expenses
     assert q("SELECT COUNT(*) FROM expense WHERE batch_id=?", bid) == 0
 
 
 def test_inventory_edit():
     c.post("/inventory", data={"kind": "honey", "name": "clover", "qty": "5", "unit": "lb", "paid": "20"})
-    iid = main.db().execute("SELECT id FROM inventory WHERE name='clover'").fetchone()[0]
-    c.post(f"/inventory/{iid}/edit", data={"kind": "fruit", "name": "cherries", "qty": "2.5", "unit": "kg",
-                                           "unit_cost": "6", "notes": "freezer"})
-    row = main.db().execute("SELECT kind, name, qty, unit, unit_cost, notes FROM inventory WHERE id=?", (iid,)).fetchone()
-    assert tuple(row) == ("fruit", "cherries", 2.5, "kg", 6.0, "freezer")
-    assert 'action="/inventory/%d/edit"' % iid not in c.get("/inventory").text  # read-only until Edit
-    assert 'action="/inventory/%d/edit"' % iid in c.get("/inventory?edit=1").text
-    assert c.post(f"/inventory/{iid}/edit", data={"name": "", "qty": "1"}).status_code == 400
-    assert c.post(f"/inventory/{iid}/edit", data={"name": "x", "qty": "-1"}).status_code == 400
-    assert c.post("/inventory/99999/edit", data={"name": "x", "qty": "1"}).status_code == 404
-
+    c.post("/inventory", data={"kind": "oak", "name": "cubes", "qty": "2", "unit": "oz"})
+    a, b = [r[0] for r in main.db().execute("SELECT id FROM inventory WHERE name IN ('clover', 'cubes') ORDER BY id")]
+    assert 'name="name-%d"' % a not in c.get("/inventory").text  # read-only until Edit
+    assert 'name="name-%d"' % a in c.get("/inventory?edit=1").text and "Save &amp; done" in c.get("/inventory?edit=1").text
+    row = lambda i: tuple(main.db().execute("SELECT kind, name, qty, unit, unit_cost, notes FROM inventory WHERE id=?", (i,)).fetchone())  # noqa: E731
+    bad = {f"name-{a}": "cherries", f"qty-{a}": "2.5", f"name-{b}": "", f"qty-{b}": "1"}
+    assert c.post("/inventory/save", data=bad).status_code == 400 and row(a)[1] == "clover"  # all or nothing
+    c.post("/inventory/save", data={f"kind-{a}": "fruit", f"name-{a}": "cherries", f"qty-{a}": "2.5", f"unit-{a}": "kg",
+                                    f"unit_cost-{a}": "6", f"notes-{a}": "freezer",
+                                    f"name-{b}": "cubes", f"qty-{b}": "2", f"remove-{b}": "on"})
+    assert row(a) == ("fruit", "cherries", 2.5, "kg", 6.0, "freezer")
+    assert not main.db().execute("SELECT 1 FROM inventory WHERE id=?", (b,)).fetchone()
 
 def test_next_steps_have_dates():
     from datetime import date, timedelta
@@ -184,3 +186,23 @@ def test_who_paid():
     page = c.get("/money").text
     assert "$100.00" in page and page.count(">even<") == 2 and "Paid back Ethan" in page
     assert '<option>Gabe</option>' in c.get("/inventory").text  # suggestions on other pages
+
+
+def test_who_paid_unassigned_and_edit():
+    con = main.db()
+    con.execute("DELETE FROM payment")
+    con.execute("INSERT INTO payment (paid_on, paid_by, amount, item) VALUES ('2026-01-01', '', 40, 'corker')")
+    con.execute("INSERT INTO payment (paid_on, paid_by, amount, item) VALUES ('2026-01-02', 'Ethan', 20, 'yeast')")
+    con.execute("INSERT INTO payment (paid_on, paid_by, amount, item) VALUES ('2026-01-03', 'Ethan', 5, 'oops')")
+    con.commit()
+    p, y, x = [r[0] for r in con.execute("SELECT id FROM payment ORDER BY id")]
+    page = c.get("/money").text
+    assert "Unassigned (not split yet)" in page and "$40.00" in page and ">even<" in page  # Ethan alone: even
+    assert f'name="item-{p}"' not in page and f'name="item-{p}"' in c.get("/money?edit=1").text
+    row = lambda i, by="Ethan", amt="20": {f"paid_on-{i}": "2026-01-01", f"paid_by-{i}": by, f"item-{i}": "x", f"amount-{i}": amt}  # noqa: E731
+    bad = {**row(p, "Gabe", "40"), **row(y, amt="0")}
+    assert c.post("/money/save", data=bad).status_code == 400  # all or nothing
+    assert con.execute("SELECT paid_by FROM payment WHERE id=?", (p,)).fetchone()[0] == ""
+    c.post("/money/save", data={**row(p, "Gabe", "40"), **row(y), **row(x, amt="5"), f"remove-{x}": "on"})
+    page = c.get("/money").text  # $60 shared, $30 each: Gabe paid 40, Ethan 20
+    assert "Unassigned" not in page and "is owed $10.00" in page and "owes $10.00" in page and "oops" not in page
