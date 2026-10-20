@@ -13,8 +13,8 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
-  header { display: flex; gap: 1.25rem; align-items: baseline; padding: .9rem 1rem; border-bottom: 1px solid var(--line); }
-  header b { font-size: 1.15rem; }
+  header { display: flex; flex-wrap: wrap; gap: .4rem 1.25rem; align-items: baseline; padding: .9rem 1rem; border-bottom: 1px solid var(--line); }
+  header b { font-size: 1.15rem; white-space: nowrap; }
   main { max-width: 980px; margin: 0 auto; padding: 1rem; }
   a { color: var(--accent); }
   h2 { margin: 1.5rem 0 .5rem; font-size: 1.05rem; text-transform: capitalize; }
@@ -46,7 +46,7 @@
 {% block head %}{% endblock %}
 </head>
 <body>
-<header><b>🍯 Mead Log</b><a href="/">Batches</a><a href="/recipes">Recipes</a><a href="/inventory">Inventory</a><a href="/calc">Calculators</a></header>
+<header><b>🍯 Mead Log</b><a href="/">Batches</a><a href="/recipes">Recipes</a><a href="/inventory">Inventory</a><a href="/calc">Calculators</a><a href="/feedback?from={{ request.url.path|urlencode }}" style="margin-left:auto">Feedback</a></header>
 <main>{% block body %}{% endblock %}</main>
 </body>
 </html>

@@ -146,3 +146,17 @@ def test_next_steps_have_dates():
     c.post(f"/batch/{bid}/event", data={"kind": "stabilize", "on_date": "2026-01-05"})
     assert task(bid) == "Stabilized — Backsweeten on or after Tue Jan 6" + ("" if today.year == 2026 else ", 2026") + " if wanted"
     assert main.day(date(today.year, 3, 7)).count(",") == 0 and main.day(date(2020, 3, 7)) == "Sat Mar 7, 2020"
+
+
+def test_feedback():
+    assert 'href="/feedback?from=/inventory"' in c.get("/inventory").text  # link on every page, carries the page
+    assert 'value="/inventory"' in c.get("/feedback?from=/inventory").text
+    assert c.post("/feedback", data={"message": "  "}).status_code == 400
+    c.post("/feedback", data={"author": "Gabe", "page": "/inventory", "message": "Sort by kind please"})
+    c.post("/feedback", data={"page": "https://evil.example", "message": "anon <b>hi</b>"})
+    rows = main.db().execute("SELECT id, author, page, done FROM feedback ORDER BY id").fetchall()
+    assert [tuple(r)[1:] for r in rows] == [("Gabe", "/inventory", 0), (None, None, 0)]  # off-site page dropped
+    page = c.get("/feedback").text
+    assert "Sort by kind please" in page and "&lt;b&gt;hi&lt;/b&gt;" in page  # escaped
+    c.post(f"/feedback/{rows[0][0]}/toggle")
+    assert main.db().execute("SELECT done FROM feedback WHERE id=?", (rows[0][0],)).fetchone()[0] == 1

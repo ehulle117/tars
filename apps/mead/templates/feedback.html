@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Feedback · Mead Log{% endblock %}
+{% block body %}
+<h1 style="margin:.25rem 0">Feedback</h1>
+<p class="muted">Ideas, bugs, anything that's confusing — for changes to the app itself. Notes about a batch go in that batch's Log.</p>
+
+<section>
+<form method="post" action="/feedback">
+  <input type="hidden" name="page" value="{{ page }}">
+  <div class="grid2">
+    <label>Your name<input name="author" id="author" placeholder="Ethan, Gabe…" autocomplete="name"></label>
+    {% if page and page != "/feedback" %}<label>About<input value="{{ page }}" disabled></label>{% endif %}
+  </div>
+  <label style="margin-top:.5rem">Remark<textarea name="message" rows="3" required placeholder="What would make this better?"></textarea></label>
+  <p><button>Send</button></p>
+</form>
+</section>
+
+{% for r in rows %}<section {% if r.done %}class="muted"{% endif %}>
+  <form class="inline" method="post" action="/feedback/{{ r.id }}/toggle" style="float:right"><button class="link" title="{{ 'Reopen' if r.done else 'Mark done' }}">{{ "↺ reopen" if r.done else "✓ done" }}</button></form>
+  <small class="muted">{{ r.author or "Someone" }} · {{ r.created_at }}{% if r.page %} · <a href="{{ r.page }}">{{ r.page }}</a>{% endif %}{% if r.done %} · done{% endif %}</small>
+  <p style="margin:.3rem 0 0;white-space:pre-wrap{% if r.done %};text-decoration:line-through{% endif %}">{{ r.message }}</p>
+</section>{% else %}<p class="muted">No feedback yet.</p>{% endfor %}
+
+<script>
+  // remember who's typing on this device; harmless if storage is blocked
+  const a = document.getElementById("author");
+  try { a.value = localStorage.getItem("mead-author") || ""; } catch (e) {}
+  a.form.addEventListener("submit", () => { try { localStorage.setItem("mead-author", a.value); } catch (e) {} });
+</script>
+{% endblock %}

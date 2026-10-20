@@ -1,7 +1,7 @@
 """Mead log: FastAPI + stdlib sqlite3 + Jinja templates."""
 import os
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS expense (
   id INTEGER PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES batch ON DELETE CASCADE,
   spent_on TEXT NOT NULL, item TEXT NOT NULL, amount REAL NOT NULL, note TEXT,
   inventory_id INTEGER REFERENCES inventory ON DELETE SET NULL, qty REAL);
+CREATE TABLE IF NOT EXISTS feedback (
+  id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, author TEXT, page TEXT, message TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0);
 """
 
 
@@ -391,6 +394,34 @@ def inventory_delete(iid: int):
     with db() as con:
         con.execute("DELETE FROM inventory WHERE id=?", (iid,))
     return back("/inventory?edit=1")
+
+
+@app.get("/feedback")
+def feedback(request: Request):
+    with db() as con:
+        rows = con.execute("SELECT * FROM feedback ORDER BY done, id DESC").fetchall()
+    page = request.query_params.get("from", "")
+    return tpl.TemplateResponse(request, "feedback.html", {"rows": rows, "page": page if page.startswith("/") else ""})
+
+
+@app.post("/feedback")
+async def feedback_add(request: Request):
+    f = await request.form()
+    if not (f.get("message") or "").strip():
+        raise HTTPException(400, "write a remark first")
+    page = f.get("page") or ""
+    with db() as con:
+        con.execute("INSERT INTO feedback (created_at, author, page, message) VALUES (?,?,?,?)",
+                    (datetime.now().strftime("%Y-%m-%d %H:%M"), (f.get("author") or "").strip() or None,
+                     page if page.startswith("/") else None, f["message"].strip()))
+    return back("/feedback")
+
+
+@app.post("/feedback/{fid}/toggle")
+def feedback_toggle(fid: int):
+    with db() as con:
+        con.execute("UPDATE feedback SET done = 1 - done WHERE id=?", (fid,))
+    return back("/feedback")
 
 
 def summary(b, s) -> dict:
