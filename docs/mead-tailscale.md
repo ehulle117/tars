@@ -19,13 +19,15 @@ change. In the admin console under **Access controls**, add one grant:
   {
     "src": ["autogroup:shared"],   // people a device is shared with
     "dst": ["tag:game"],
-    "ip":  ["tcp:8770"],
+    "ip":  ["tcp:80"],
   },
 ],
 ```
 
 Sharing is still per device: Gabe reaches only what's shared with him, so this doesn't
-open anything on the valheim servers to him (and nothing listens on 8770 there).
+open anything on the valheim servers to him (nothing listens on 80 there). Port 80 on
+`homebrew` forwards to the app (see the `mead-tailscale-serve` ConfigMap), so the address
+has no port number.
 
 ### 2. Auth key
 
@@ -51,6 +53,7 @@ kubectl -n apps exec deploy/mead -c tailscale -- tailscale ip -4
 ### 5. Share with Gabe
 
 **Machines → `homebrew` → ⋯ → Share…**, then send him the invite link. Once he accepts,
-he opens `http://<tailnet IP from step 4>:8770`.
+he opens `http://homebrew.tail94a391.ts.net`, or `http://<tailnet IP from step 4>` if that
+name doesn't resolve for him.
 
 To revoke access: **Machines → `homebrew` → ⋯ → Share…** and remove him.
