@@ -12,6 +12,41 @@ spec:
       storage: 1Gi
 ---
 apiVersion: apps/v1
+# Tailscale access for people off the LAN (Gabe): a sidecar joins the tailnet as
+# its own device, `homebrew`, and that one device is shared, same as valheim2. See
+# docs/mead-tailscale.md for the auth-key secret, the grant and the share.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mead-tailscale
+  namespace: apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mead-tailscale
+  namespace: apps
+rules:
+  # Persists the node state so the tailnet identity and IP survive restarts.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mead-tailscale
+  namespace: apps
+subjects:
+  - kind: ServiceAccount
+    name: mead-tailscale
+    namespace: apps
+roleRef:
+  kind: Role
+  name: mead-tailscale
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mead
@@ -35,6 +70,7 @@ spec:
       # Moving nodes again strands the local-path PVC: copy mead.db across first.
       nodeSelector:
         kubernetes.io/hostname: tars
+      serviceAccountName: mead-tailscale
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000
@@ -61,6 +97,30 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+        - name: tailscale
+          image: ghcr.io/tailscale/tailscale:v1.104.1
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: mead-tailscale-auth
+                  key: TS_AUTHKEY
+            - name: TS_KUBE_SECRET
+              value: mead-tailscale-state
+            - name: TS_HOSTNAME
+              value: homebrew
+            # Userspace mode forwards tailnet connections to localhost, so
+            # http://homebrew:8770 reaches the app with no root or NET_ADMIN.
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_EXTRA_ARGS
+              value: "--advertise-tags=tag:homebrew"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
       volumes:
         - name: data
           persistentVolumeClaim:
