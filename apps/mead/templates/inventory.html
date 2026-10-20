@@ -25,14 +25,14 @@
 </form>
 {% else %}
 <form class="row" method="get" action="/inventory" style="justify-content:space-between;align-items:center;margin:0 0 .75rem">
-  <span class="muted">On-hand value <b class="num">{{ "$%.2f"|format(value) }}</b></span>
+  <span class="muted">Supplies on hand <b class="num">{{ "$%.2f"|format(value) }}</b> · equipment <b class="num">{{ "$%.2f"|format(equipment_value) }}</b></span>
   {% if items %}<input type="hidden" name="edit" value="1"><button>Edit</button>{% endif %}
 </form>
 
 <section class="scroll">
 <table>
   <tr><th>Kind</th><th>Item</th><th>On hand</th><th>Unit cost</th><th>Value</th><th>Restock (+) or correct (−)</th></tr>
-  {% for i in items %}<tr {% if i.qty <= 0 %}class="muted"{% endif %}>
+  {% for i in supplies %}<tr {% if i.qty <= 0 %}class="muted"{% endif %}>
     <td>{{ i.kind or "" }}</td>
     <td class="wrap">{{ i.name }}{% if i.notes %}<br><small class="muted">{{ i.notes }}</small>{% endif %}</td>
     <td class="num">{{ i.qty|round(2) }} {{ i.unit or "" }}</td>
@@ -43,25 +43,47 @@
       <input name="paid" type="number" step="0.01" min="0" placeholder="paid $">
       <input name="paid_by" list="payers" placeholder="paid by" size="7">
       <button>Update</button></form></td>
-  </tr>{% else %}<tr><td colspan="6" class="muted">Nothing tracked yet — add what's on your shelf below.</td></tr>{% endfor %}
+  </tr>{% else %}<tr><td colspan="6" class="muted">No supplies tracked yet — add what's on your shelf below.</td></tr>{% endfor %}
 </table>
 </section>
+
+{% if equipment %}
+<h2>Equipment <span class="muted">({{ "$%.2f"|format(equipment_value) }})</span></h2>
+<section class="scroll">
+<table>
+  <tr><th>Item</th><th>Count</th><th>Cost each</th><th>Total</th></tr>
+  {% for i in equipment %}<tr>
+    <td class="wrap">{{ i.name }}{% if i.notes %}<br><small class="muted">{{ i.notes }}</small>{% endif %}</td>
+    <td class="num">{{ "%g"|format(i.qty) }}</td>
+    <td class="num">{{ "$%.2f"|format(i.unit_cost) if i.unit_cost is not none else "" }}</td>
+    <td class="num">{{ "$%.2f"|format(i.qty * i.unit_cost) if i.unit_cost is not none else "" }}</td>
+  </tr>{% endfor %}
+</table>
+</section>
+{% endif %}
 {% endif %}
 
 {% if not editing %}
 <section>
 <h2 style="margin-top:0">Add item</h2>
 <form class="row" method="post" action="/inventory">
-  <label>Kind<select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
+  <label>Kind<select name="kind" id="add-kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
   <label>Item<input name="name" placeholder="orange blossom honey" required></label>
   <label>Qty<input name="qty" type="number" step="any" min="0" required></label>
-  <label>Unit<select name="unit">{% for u in units %}<option>{{ u }}</option>{% endfor %}</select></label>
+  <label>Unit<select name="unit" id="add-unit">{% for u in units %}<option {{ "selected" if u == kind_unit[kinds[0]] }}>{{ u }}</option>{% endfor %}</select></label>
   <label>Paid $ (total)<input name="paid" type="number" step="0.01" min="0"></label>
   <label>Paid by<input name="paid_by" list="payers" placeholder="optional" size="9"></label>
   <label>Notes<input name="notes" placeholder="where it's stored, lot, best-by…"></label>
   <button>Add</button>
 </form>
-<p class="muted" style="font-size:.85rem">Unit cost = what you paid ÷ qty. Restocking with a price averages it in; use Edit to fix a typo or a miscount (past batch costs keep the price they were charged). Use stock on a batch from that batch's Costs section, so it's charged to the batch.</p>
+<script>
+  // picking a kind starts the unit at the usual one for it (still changeable)
+  const kindUnit = {{ kind_unit|tojson }};
+  document.getElementById("add-kind").addEventListener("change", e => {
+    if (kindUnit[e.target.value]) document.getElementById("add-unit").value = kindUnit[e.target.value];
+  });
+</script>
+<p class="muted" style="font-size:.85rem">Equipment (kind "equipment") is listed separately and never charged to a batch. Unit cost = what you paid ÷ qty. Restocking with a price averages it in; use Edit to fix a typo or a miscount (past batch costs keep the price they were charged). Use stock on a batch from that batch's Costs section, so it's charged to the batch.</p>
 </section>
 {% endif %}
 {% endblock %}

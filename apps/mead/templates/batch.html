@@ -111,10 +111,11 @@
 {% if stock %}<form class="row" method="post" action="/batch/{{ b.id }}/use">
   <label>Use from inventory<select name="inventory_id">{% for i in stock %}<option value="{{ i.id }}">{{ i.name }} ({{ i.qty|round(2) }} {{ i.unit or "" }} on hand{% if i.unit_cost %}, ${{ "%.2f"|format(i.unit_cost) }}/{{ i.unit or "unit" }}{% endif %})</option>{% endfor %}</select></label>
   <label>Qty<input name="qty" type="number" step="any" min="0" required></label>
+  <label>Unit<select name="unit"><option value="">same as stock</option>{% for u in units %}<option>{{ u }}</option>{% endfor %}</select></label>
   <label>Date<input name="spent_on" type="date" value="{{ today }}"></label>
   <button>Use</button>
 </form>{% endif %}
-<p class="muted" style="font-size:.85rem">"Use" takes it out of <a href="/inventory">inventory</a> and charges it to this batch at its average cost. Removing that line puts it back.</p>
+<p class="muted" style="font-size:.85rem">"Use" takes it out of <a href="/inventory">inventory</a> and charges it to this batch at its average cost; Unit converts weights (g, oz, lb, kg) and volumes (ml, tsp, gal…), so weigh powders on the scale. Removing that line puts it back. Equipment isn't listed: it's kept, not used up.</p>
 </section>
 
 {% if s.tosna %}

@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 
 L_PER_GAL = 3.78541
 LB_PER = {"lb": 1.0, "oz": 1 / 16, "kg": 2.20462, "g": 0.00220462}
-GAL_PER = {"gal": 1.0, "l": 1 / L_PER_GAL, "ml": 0.001 / L_PER_GAL}
+GAL_PER = {"gal": 1.0, "l": 1 / L_PER_GAL, "ml": 0.001 / L_PER_GAL, "tbsp": 1 / 256, "tsp": 1 / 768}
 HONEY_PPG = 35.0  # gravity points per lb per gallon
 
 
@@ -16,6 +16,17 @@ def to_lb(amount: float, unit: str) -> Optional[float]:
 def to_gal(amount: float, unit: str) -> Optional[float]:
     f = GAL_PER.get(unit.lower())
     return None if f is None else amount * f
+
+
+def convert(amount: float, frm: str, to: str) -> Optional[float]:
+    """Between weights or between volumes (not weight<->volume: a tsp of DAP weighs ~2x a tsp of Fermaid-O)."""
+    frm, to = (frm or "").lower(), (to or "").lower()
+    if frm == to:
+        return amount
+    for table in (LB_PER, GAL_PER):
+        if frm in table and to in table:
+            return amount * table[frm] / table[to]
+    return None
 
 
 def estimate_og(ingredients: List[Dict], volume_gal: float) -> Optional[float]:

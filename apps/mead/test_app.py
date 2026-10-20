@@ -206,3 +206,26 @@ def test_who_paid_unassigned_and_edit():
     c.post("/money/save", data={**row(p, "Gabe", "40"), **row(y), **row(x, amt="5"), f"remove-{x}": "on"})
     page = c.get("/money").text  # $60 shared, $30 each: Gabe paid 40, Ethan 20
     assert "Unassigned" not in page and "is owed $10.00" in page and "owes $10.00" in page and "oops" not in page
+
+
+def test_units_and_equipment():
+    db = lambda sql, *a: main.db().execute(sql, a).fetchone()  # noqa: E731
+    bid = int(c.post("/batch", data={"name": "units-check"}).url.path.split("/")[-1])
+    c.post("/inventory", data={"kind": "nutrient", "name": "Fermaid K", "qty": "100", "unit": "g", "paid": "10"})
+    c.post("/inventory", data={"kind": "equipment", "name": "Kitchen scale", "qty": "1", "unit": "each", "paid": "18",
+                               "paid_by": "Ethan"})
+    fk, scale = db("SELECT id FROM inventory WHERE name='Fermaid K'")[0], db("SELECT id FROM inventory WHERE name='Kitchen scale'")[0]
+    assert db("SELECT item FROM payment WHERE amount=18")[0] == "Kitchen scale"  # not "1 each Kitchen scale"
+    inv = c.get("/inventory").text
+    assert "<h2>Equipment" in inv and "equipment <b class=\"num\">$18.00</b>" in inv
+    assert '"equipment": "each"' in inv  # kind -> default unit map for Add item
+    page = c.get(f"/batch/{bid}").text
+    assert f'<option value="{fk}">' in page and f'<option value="{scale}">' not in page  # equipment isn't "used"
+    c.post(f"/batch/{bid}/use", data={"inventory_id": fk, "qty": "0.5", "unit": "oz"})  # 14.17 g
+    assert db("SELECT qty FROM inventory WHERE id=?", fk)[0] == approx(100 - 14.1748, abs=1e-3)
+    assert db("SELECT item FROM expense WHERE batch_id=?", bid)[0] == "0.5 oz Fermaid K (= 14.17 g)"
+    assert c.post(f"/batch/{bid}/use", data={"inventory_id": fk, "qty": "1", "unit": "tsp"}).status_code == 400
+    assert c.post(f"/batch/{bid}/use", data={"inventory_id": fk, "qty": "1", "unit": "kg"}).status_code == 400  # > on hand
+    eid = db("SELECT id FROM expense WHERE batch_id=?", bid)[0]
+    c.post(f"/batch/{bid}/expense/{eid}/delete")  # undo returns the converted grams
+    assert db("SELECT qty FROM inventory WHERE id=?", fk)[0] == approx(100)

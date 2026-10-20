@@ -18,6 +18,9 @@ EVENTS = ["pitch", "nutrient", "degas", "rack", "stabilize", "backsweeten", "bot
 INV_KINDS = ["honey", "fruit", "yeast", "nutrient", "acid", "tannin", "spice", "oak", "stabilizer",
              "packaging", "equipment", "cleaning", "other"]
 UNITS = ["lb", "oz", "kg", "g", "gal", "l", "ml", "tsp", "tbsp", "each"]
+# the unit Add item starts with for each kind; equipment is kept, not used up, so it's never charged to a batch
+KIND_UNIT = {"honey": "lb", "fruit": "lb", "yeast": "each", "nutrient": "g", "acid": "g", "tannin": "g", "spice": "g",
+             "oak": "oz", "stabilizer": "g", "packaging": "each", "equipment": "each", "cleaning": "oz", "other": "each"}
 BOTTLES_PER_GAL = 3785.41 / 750
 PROTOCOLS = {"tosna": "TOSNA (Fermaid-O)", "recipe": "As recipe (no checklist)"}
 WIKI = "https://wiki.meadtools.com/en/"
@@ -115,6 +118,13 @@ def num(v) -> Optional[float]:
 def day(d: date) -> str:
     """'Sat Oct 12', with the year only when it isn't this year."""
     return d.strftime("%a %b ") + str(d.day) + (d.strftime(", %Y") if d.year != date.today().year else "")
+
+
+def stock_label(qty: float, unit: str, name: str) -> str:
+    """'3 lb honey', but 'Kitchen scale' / 'Carboy ×2' for things counted each."""
+    if unit in ("each", None, ""):
+        return name if qty == 1 else f"{name} ×{qty:g}"
+    return f"{qty:g} {unit} {name}"
 
 
 def back(path: str):
@@ -230,7 +240,8 @@ def batch_view(request: Request, bid: int):
         events = con.execute("SELECT * FROM event WHERE batch_id=? ORDER BY on_date, id", (bid,)).fetchall()
     return tpl.TemplateResponse(request, "batch.html", {
         "b": b, "s": s, "events": events, "statuses": STATUSES, "kinds": KINDS, "event_kinds": EVENTS, "units": UNITS,
-        "stock": con.execute("SELECT * FROM inventory WHERE qty > 0 ORDER BY kind, name").fetchall(),
+        "stock": con.execute("SELECT * FROM inventory WHERE qty > 0 AND kind IS NOT 'equipment' "
+                             "ORDER BY kind, name").fetchall(),
         "n_needs": list(chem.N_FACTOR), "protocols": PROTOCOLS, "today": date.today().isoformat()})
 
 
@@ -349,15 +360,24 @@ async def add_expense(bid: int, request: Request):
 async def use_stock(bid: int, request: Request):
     """Take stock off the shelf for a batch: lowers inventory and books its cost as a batch expense."""
     f = await request.form()
-    qty = num(f.get("qty"))
+    entered, unit = num(f.get("qty")), f.get("unit") or None
     with db() as con:
         get_batch(con, bid)
         inv = con.execute("SELECT * FROM inventory WHERE id=?", (num(f.get("inventory_id")),)).fetchone()
-        if not inv or qty is None or not 0 < qty <= inv["qty"]:
-            raise HTTPException(400, "pick an item and a quantity no more than what's on hand")
+        if not inv or entered is None or entered <= 0:
+            raise HTTPException(400, "pick an item and a quantity")
+        unit = unit or inv["unit"]
+        qty = chem.convert(entered, unit, inv["unit"])  # in the stock's own unit, so undo puts back the same
+        if qty is None:
+            raise HTTPException(400, f"can't turn {unit} into {inv['unit']} for {inv['name']}: weigh it, or use "
+                                     f"{inv['unit']}")
+        if qty > inv["qty"] + 1e-9:
+            raise HTTPException(400, f"only {inv['qty']:g} {inv['unit']} of {inv['name']} on hand")
+        qty = min(qty, inv["qty"])
+        label = stock_label(entered, unit, inv["name"]) + ("" if unit == inv["unit"] else f" (= {qty:.4g} {inv['unit']})")
         con.execute("UPDATE inventory SET qty = qty - ? WHERE id=?", (qty, inv["id"]))
         con.execute("INSERT INTO expense (batch_id, spent_on, item, amount, inventory_id, qty) VALUES (?,?,?,?,?,?)",
-                    (bid, f.get("spent_on") or date.today().isoformat(), f"{qty:g} {inv['unit'] or ''} {inv['name']}",
+                    (bid, f.get("spent_on") or date.today().isoformat(), label,
                      round(qty * (inv["unit_cost"] or 0), 2), inv["id"], qty))
     return back(f"/batch/{bid}")
 
@@ -378,9 +398,13 @@ def delete_row(bid: int, table: str, rid: int):
 def inventory(request: Request):
     with db() as con:
         items = con.execute("SELECT * FROM inventory ORDER BY kind, name").fetchall()
-    value = sum(i["qty"] * (i["unit_cost"] or 0) for i in items)
-    return tpl.TemplateResponse(request, "inventory.html", {"items": items, "value": value, "kinds": INV_KINDS,
-                                                            "units": UNITS, "editing": "edit" in request.query_params})
+    supplies = [i for i in items if i["kind"] != "equipment"]
+    equipment = [i for i in items if i["kind"] == "equipment"]
+    return tpl.TemplateResponse(request, "inventory.html", {
+        "items": items, "supplies": supplies, "equipment": equipment,
+        "value": sum(i["qty"] * (i["unit_cost"] or 0) for i in supplies),
+        "equipment_value": sum(i["qty"] * (i["unit_cost"] or 0) for i in equipment),
+        "kinds": INV_KINDS, "units": UNITS, "kind_unit": KIND_UNIT, "editing": "edit" in request.query_params})
 
 
 @app.post("/inventory")
@@ -393,7 +417,7 @@ async def inventory_add(request: Request):
         con.execute("INSERT INTO inventory (kind, name, qty, unit, unit_cost, notes) VALUES (?,?,?,?,?,?)",
                     (f.get("kind"), f["name"], qty, f.get("unit"), paid / qty if paid is not None and qty else None,
                      f.get("notes")))
-        record_payment(con, f, paid, f"{qty:g} {f.get('unit') or ''} {f['name']}")
+        record_payment(con, f, paid, stock_label(qty, f.get("unit"), f["name"]))
     return back("/inventory")
 
 
@@ -411,7 +435,7 @@ async def inventory_adjust(iid: int, request: Request):
             cost = (inv["qty"] * (cost or paid / delta) + paid) / (inv["qty"] + delta)
         con.execute("UPDATE inventory SET qty=?, unit_cost=? WHERE id=?", (inv["qty"] + delta, cost, iid))
         if delta > 0:
-            record_payment(con, f, paid, f"{delta:g} {inv['unit'] or ''} {inv['name']} (restock)")
+            record_payment(con, f, paid, stock_label(delta, inv["unit"], inv["name"]) + " (restock)")
     return back("/inventory")
 
 

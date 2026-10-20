@@ -76,3 +76,11 @@ def test_seed_recipes_match_wiki_targets():
             continue
         ings = [{"amount": a, "unit": u, "ppg": p} for _, _, a, u, p in r["ings"]]
         assert chem.estimate_og(ings, r["volume_gal"]) == approx(r["target_og"], abs=0.008), r["name"]
+
+
+def test_convert():
+    assert chem.convert(1, "lb", "g") == approx(453.592, rel=1e-4)
+    assert chem.convert(16, "oz", "lb") == approx(1)
+    assert chem.convert(3, "tsp", "tbsp") == approx(1) and chem.convert(1, "gal", "ml") == approx(3785.41, rel=1e-4)
+    assert chem.convert(2, "each", "each") == 2
+    assert chem.convert(1, "tsp", "g") is None and chem.convert(1, "each", "lb") is None  # no weight<->volume
