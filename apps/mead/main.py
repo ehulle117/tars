@@ -322,7 +322,7 @@ def inventory(request: Request):
         items = con.execute("SELECT * FROM inventory ORDER BY kind, name").fetchall()
     value = sum(i["qty"] * (i["unit_cost"] or 0) for i in items)
     return tpl.TemplateResponse(request, "inventory.html", {"items": items, "value": value, "kinds": INV_KINDS,
-                                                            "units": UNITS})
+                                                            "units": UNITS, "editing": "edit" in request.query_params})
 
 
 @app.post("/inventory")
@@ -366,14 +366,14 @@ async def inventory_edit(iid: int, request: Request):
                           (f.get("kind"), f["name"], qty, f.get("unit"), cost, f.get("notes") or None, iid))
         if not cur.rowcount:
             raise HTTPException(404)
-    return back("/inventory")
+    return back("/inventory?edit=1")
 
 
 @app.post("/inventory/{iid}/delete")
 def inventory_delete(iid: int):
     with db() as con:
         con.execute("DELETE FROM inventory WHERE id=?", (iid,))
-    return back("/inventory")
+    return back("/inventory?edit=1")
 
 
 def summary(b, s) -> dict:

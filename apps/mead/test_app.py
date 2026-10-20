@@ -115,6 +115,8 @@ def test_inventory_edit():
                                            "unit_cost": "6", "notes": "freezer"})
     row = main.db().execute("SELECT kind, name, qty, unit, unit_cost, notes FROM inventory WHERE id=?", (iid,)).fetchone()
     assert tuple(row) == ("fruit", "cherries", 2.5, "kg", 6.0, "freezer")
+    assert 'action="/inventory/%d/edit"' % iid not in c.get("/inventory").text  # read-only until Edit
+    assert 'action="/inventory/%d/edit"' % iid in c.get("/inventory?edit=1").text
     assert c.post(f"/inventory/{iid}/edit", data={"name": "", "qty": "1"}).status_code == 400
     assert c.post(f"/inventory/{iid}/edit", data={"name": "x", "qty": "-1"}).status_code == 400
     assert c.post("/inventory/99999/edit", data={"name": "x", "qty": "1"}).status_code == 404
