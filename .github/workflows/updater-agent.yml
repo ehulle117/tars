@@ -1,6 +1,9 @@
 name: Build and Deploy Updater Agent
 
 on:
+  # Manual trigger: a squash merge's push event didn't fire this workflow on
+  # 2026-10-21 (#160), leaving :main unbuilt.
+  workflow_dispatch:
   push:
     branches: [ "main" ]
     paths:
@@ -40,7 +43,7 @@ jobs:
   build-and-push:
     needs: lint-and-test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     defaults:
       run:
         working-directory: ./tars-updater-agent
