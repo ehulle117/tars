@@ -14,7 +14,8 @@
 # running this one workload, not the rest of what used to share the node.
 # 2026-10-16: shrunk to 4GB and tainted dedicated=valheim2:NoSchedule so
 # nothing else lands on it (a 6GB VM + uncapped Immich OOM'd `case` after
-# a bad DIMM cut its RAM to 16GB).
+# a bad DIMM cut its RAM to 16GB). 2026-10-21: grown to 5GB (Satisfactory
+# on `case` capped at 6g) because the world's memory reached 2.8GB.
 #
 # Same pattern as before: a Tailscale sidecar shares the pod's network
 # namespace, so the tailnet IP for this pod IS the server address.
@@ -101,7 +102,7 @@ spec:
         app: valheim2
     spec:
       serviceAccountName: valheim2-tailscale
-      # k3s-worker-case is a small, dedicated VM (2 vCPU / 4GB) running
+      # k3s-worker-case is a small, dedicated VM (2 vCPU / 5GB) running
       # only this workload (tainted dedicated=valheim2:NoSchedule) --
       # local-path PVCs are node-local anyway, but
       # pinning explicitly is clearer now that there are 3 worker nodes,
@@ -191,16 +192,16 @@ spec:
           securityContext:
             capabilities:
               add: ["SYS_NICE"]
-          # k3s-worker-case only has 4GB total (was 6GB until 2026-10-16).
-          # Observed live usage on native Docker was ~2.2GB, so a 3Gi limit
-          # keeps ~0.8GB headroom for player spikes while leaving room for
-          # the tailscale sidecar and k3s/containerd overhead inside 4GB.
+          # k3s-worker-case has 5GB total (6GB until 2026-10-16, 4GB until
+          # 2026-10-21). Usage grew 1.9GB -> 2.8GB over 10-16..10-21 as the
+          # world grew (91% of the old 3Gi limit, 0 players), so 4Gi leaves
+          # ~1.2GB headroom with ~1GB for the tailscale sidecar, k3s and OS.
           resources:
             requests:
               cpu: 500m
               memory: 2Gi
             limits:
-              memory: 3Gi
+              memory: 4Gi
           volumeMounts:
             - name: config
               mountPath: /config
