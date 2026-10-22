@@ -37,23 +37,27 @@ spec:
           operator: Equal
           value: arm64
           effect: NoSchedule
-      hostNetwork: true
-      dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: poller
           image: ghcr.io/ehulle117/tars-adsb-tools:main
+          imagePullPolicy: Always
           command: ["python3", "run.py"]
           workingDir: /app
+          env:
+            - name: ADSB_DATA_DIR
+              value: /data
+            # dump1090-mutability (a host service) writes this file; read it directly
+            # instead of through a hand-started HTTP bridge that dies on reboot.
+            - name: AIRCRAFT_URL
+              value: file:///dump1090/aircraft.json
+            - name: PYTHONUNBUFFERED
+              value: "1"
           volumeMounts:
             - name: data
-              mountPath: /app/state.json
-              subPath: state.json
-            - name: data
-              mountPath: /app/adsb_tools.db
-              subPath: adsb_tools.db
-            - name: data
-              mountPath: /app/photo_cache.json
-              subPath: photo_cache.json
+              mountPath: /data
+            - name: dump1090
+              mountPath: /dump1090
+              readOnly: true
             - name: discord-token
               mountPath: /root/.config/adsb-tools/discord_bot_token
               subPath: discord_bot_token
@@ -64,6 +68,10 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: adsb-tools-data-pvc
+        - name: dump1090
+          hostPath:
+            path: /run/dump1090-mutability
+            type: Directory
         - name: discord-token
           secret:
             secretName: adsb-tools-discord
@@ -107,17 +115,16 @@ spec:
         - name: map
           image: ghcr.io/ehulle117/tars-adsb-tools:main
           imagePullPolicy: Always
-          command: ["python3", "map_server.py", "/app/state.json", "8766"]
+          command: ["python3", "map_server.py", "/data/state.json", "8766"]
           workingDir: /app
+          env:
+            - name: ADSB_DATA_DIR
+              value: /data
           ports:
             - containerPort: 8766
           volumeMounts:
             - name: data
-              mountPath: /app/state.json
-              subPath: state.json
-            - name: data
-              mountPath: /app/photo_cache.json
-              subPath: photo_cache.json
+              mountPath: /data
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -167,14 +174,16 @@ spec:
         - name: coverage
           image: ghcr.io/ehulle117/tars-adsb-tools:main
           imagePullPolicy: Always
-          command: ["python3", "coverage_server.py", "/app/adsb_tools.db", "8767"]
+          command: ["python3", "coverage_server.py", "/data/adsb_tools.db", "8767"]
           workingDir: /app
+          env:
+            - name: ADSB_DATA_DIR
+              value: /data
           ports:
             - containerPort: 8767
           volumeMounts:
             - name: data
-              mountPath: /app/adsb_tools.db
-              subPath: adsb_tools.db
+              mountPath: /data
       volumes:
         - name: data
           persistentVolumeClaim:
