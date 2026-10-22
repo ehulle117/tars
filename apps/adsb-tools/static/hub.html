@@ -56,6 +56,30 @@ for (const w of WINDOWS) {
   panes.appendChild(w.pane);
 }
 refresh();
+
+// Keep the two Leaflet maps at the same center and zoom. Same-origin iframes,
+// so the hub can reach each page's map via window.leafletMap. 'move' fires for
+// both pan and zoom; the flag stops B's echo from re-driving A.
+let linked = false;
+let syncing = false;
+function mirror(from, to) {
+  from.on('move', () => {
+    if (syncing) return;
+    syncing = true;
+    to.setView(from.getCenter(), from.getZoom(), { animate: false });
+    syncing = false;
+  });
+}
+setInterval(() => {
+  if (linked) return;
+  const maps = WINDOWS.map(w => { try { return w.frame.contentWindow.leafletMap; } catch (e) { return null; } });
+  if (!maps.every(Boolean)) return;
+  linked = true;
+  const [live, cov] = maps;
+  cov.setView(live.getCenter(), live.getZoom(), { animate: false });
+  mirror(live, cov);
+  mirror(cov, live);
+}, 500);
 </script>
 </body>
 </html>

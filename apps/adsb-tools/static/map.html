@@ -40,6 +40,7 @@ let focusedLive = false;  // true once we've centered on a live match for focusH
 
 function initMap(lat, lon) {
   map = L.map('map').setView([lat, lon], 8);
+  window.leafletMap = map;  // read by hub.html to sync panning/zoom
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors'
   }).addTo(map);

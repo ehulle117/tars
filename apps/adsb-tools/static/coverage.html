@@ -79,6 +79,7 @@ async function load() {
 
   const center = data.receiver || points[0];
   const map = L.map('map').setView([center.lat, center.lon], 7);
+  window.leafletMap = map;  // read by hub.html to sync panning/zoom
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors'
   }).addTo(map);
