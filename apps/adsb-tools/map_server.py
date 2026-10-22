@@ -23,6 +23,7 @@ from photo_lookup import get_photo
 from adsb_tools.db import get_db
 from closest_approach import leaderboard
 from fleet import HEX_RE, build_aircraft, build_fleet
+import flight_route
 
 STATIC_DIR = Path(__file__).parent / "static"
 # In-cluster Service name; override for local dev.
@@ -100,6 +101,7 @@ def build_response(state_path: str) -> dict:
         route = lookup_route(a["hex"])  # cached on disk, fails soft to None
         a["route"] = route
         a["photo"] = get_photo(a["hex"], (route or {}).get("type"), (route or {}).get("manufacturer"))
+        a["flightroute"] = flight_route.lookup(a.get("flight"))  # origin/destination; None until looked up
     return state
 
 
@@ -141,6 +143,8 @@ def make_handler(state_path: str):
                     self._send(b'{"error": "not a 6-digit hex"}', "application/json", 404)
                 else:
                     detail["photo"] = get_photo(detail["hex"], detail.get("type"), detail.get("manufacturer"))
+                    latest = next((s["flight"] for s in detail["sessions"] if s["flight"]), None)
+                    detail["flightroute"] = flight_route.lookup(latest)
                     self._send(json.dumps(detail).encode(), "application/json")
             elif self.path.startswith("/activity.json"):
                 q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)

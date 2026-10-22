@@ -70,6 +70,10 @@
   .plane-icon { display: block; }
   .plane-label { position: absolute; left: 18px; top: -9px; font: 11px var(--mono); color: var(--mute); white-space: nowrap; text-shadow: 0 0 3px #0B0E13, 0 0 3px #0B0E13; }
 
+  .route { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; margin: 6px 0 2px; color: var(--mute); font-size: 12px; }
+  .route b { color: var(--hi); font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+  .route .arr { color: var(--violet); }
+  .route .al { flex-basis: 100%; font-size: 11px; }
   .pop-h { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
   .pop-h b { color: var(--hi); font-size: 13px; }
   .pop-h span, .pop-sub { color: var(--mute); }
@@ -389,6 +393,17 @@ function photoBlockHtml(photo) {
           <div class="pop-credit">${caption}${photo.credit ? ' — ' + esc(photo.credit) : ''}</div>`;
 }
 
+// Origin/destination from adsbdb (airline schedule for the callsign; ADS-B itself has no route).
+const apCode = a => (a && (a.iata || a.icao)) || '?';
+const routeShort = fr => (fr && fr.origin && fr.destination ? `${apCode(fr.origin)} → ${apCode(fr.destination)}` : '');
+function routeHtml(fr) {
+  if (!fr || !fr.origin || !fr.destination) return '';
+  const o = fr.origin, d = fr.destination, place = a => esc(a.city || a.name || '');
+  return `<div class="route" title="${esc(`${o.name} → ${d.name}`)} — the airline's usual route for this callsign, so it can be wrong">
+    <span><b>${esc(apCode(o))}</b> ${place(o)}</span><span class="arr">→</span><span><b>${esc(apCode(d))}</b> ${place(d)}</span>
+    ${fr.airline ? `<span class="al">${esc(fr.airline)}</span>` : ''}</div>`;
+}
+
 function popupContent(a) {
   const r = a.route || {}, rng = rangeOf(a), vr = a.vert_rate ?? a.baro_rate;
   const more = [['Hex', a.hex], ['Manufacturer', r.manufacturer], ['Vert. rate', vr != null ? `${vr} ft/min` : null],
@@ -397,6 +412,7 @@ function popupContent(a) {
   return `${photoBlockHtml(a.photo)}
     <div class="pop-h"><b>${esc((a.flight || '').trim() || a.hex)}</b><span class="mono">${esc(r.registration || '')}</span></div>
     <div class="pop-sub">${esc([r.type, rng != null ? rng.toFixed(1) + ' km' : null].filter(Boolean).join(' · ') || '—')}</div>
+    ${routeHtml(a.flightroute)}
     <div class="pop-grid"><div><span>ALT</span><b>${esc(fmtAlt(a.alt_baro))}</b></div>
       <div><span>GS</span><b>${a.gs != null ? Math.round(a.gs) : '—'}</b></div>
       <div><span>HDG</span><b>${a.track != null ? String(Math.round(a.track)).padStart(3, '0') : '—'}</b></div></div>
@@ -462,7 +478,7 @@ function renderTraffic() {
   $('traffic-n').textContent = pb.active ? 'live feed · replaying' : `${list.length} · by range`;
   $('traffic-list').innerHTML = list.length ? list.map(({ a, rng }) => {
     const r = a.route || {};
-    const sub = [r.type || r.registration, fmtAlt(a.alt_baro), a.gs != null ? `${Math.round(a.gs)} kt` : null].filter(Boolean).join(' · ');
+    const sub = [routeShort(a.flightroute), r.type || r.registration, fmtAlt(a.alt_baro), a.gs != null ? `${Math.round(a.gs)} kt` : null].filter(Boolean).join(' · ');
     return `<div class="tr" data-hex="${esc(a.hex)}"><span class="dot" style="background:${altColor(a.alt_baro)}"></span>
       <div style="min-width:0"><div class="cs">${esc((a.flight || '').trim() || a.hex)}</div><div class="sub">${esc(sub)}</div></div>
       <div class="rng">${rng != null ? fmtKm(rng) + ' km' : '—'}</div></div>`;
@@ -482,6 +498,7 @@ function cardHtml({ a, rng }, sel) {
     <div class="ah"><div class="ph" ${ph ? `style="background-image:url('${esc(ph).replace(/'/g, '%27')}')"` : ''}></div>
       <div style="min-width:0;flex:1"><div class="cs">${esc((a.flight || '').trim() || a.hex)}</div>
       <div class="sub">${esc([r.registration, r.type, r.manufacturer].filter(Boolean).join(' · ') || a.hex)}</div></div></div>
+    ${routeHtml(a.flightroute)}
     <div class="st"><div><span>Alt</span><b style="font-weight:400;color:${altColor(a.alt_baro)}">${esc(fmtAlt(a.alt_baro))}</b></div>
       <div><span>GS</span>${a.gs != null ? Math.round(a.gs) : '—'}</div>
       <div><span>Hdg</span>${a.track != null ? String(Math.round(a.track)).padStart(3, '0') : '—'}</div>

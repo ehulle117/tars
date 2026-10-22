@@ -72,6 +72,10 @@
   .d-title b { font-size: 26px; font-weight: 600; color: var(--hi); font-family: var(--mono); }
   .d-title span { font-family: var(--mono); font-size: 12px; color: var(--mute); }
   .d-sub { color: var(--mute); }
+  .route { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; margin: 6px 0 2px; color: var(--mute); font-size: 12px; }
+  .route b { color: var(--hi); font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+  .route .arr { color: var(--violet); }
+  .route .al { flex-basis: 100%; font-size: 11px; }
   .photo { margin-top: 14px; height: 140px; border-radius: 12px; background: linear-gradient(135deg, #1A1A33, #10202A) center / cover no-repeat; position: relative; overflow: hidden; }
   .photo span { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: var(--hi); background: rgba(11,14,19,.7); padding: 1px 6px; border-radius: 4px; }
   .facts { margin-top: 14px; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
@@ -175,6 +179,17 @@ const MOBILE_SORTS = ['last_seen', 'closest_km', 'sessions', 'days', 'tail'];
 const params = new URLSearchParams(location.search);
 let rows = [], sortKey = 'last_seen', sortDir = -1, shown = PAGE, filter = 'all', selHex = (params.get('hex') || '').toLowerCase();
 const $ = id => document.getElementById(id);
+// Origin/destination from adsbdb (airline schedule for the callsign; ADS-B itself has no route).
+const apCode = a => (a && (a.iata || a.icao)) || '?';
+const routeShort = fr => (fr && fr.origin && fr.destination ? `${apCode(fr.origin)} → ${apCode(fr.destination)}` : '');
+function routeHtml(fr) {
+  if (!fr || !fr.origin || !fr.destination) return '';
+  const o = fr.origin, d = fr.destination, place = a => esc(a.city || a.name || '');
+  return `<div class="route" title="${esc(`${o.name} → ${d.name}`)} — the airline's usual route for this callsign, so it can be wrong">
+    <span><b>${esc(apCode(o))}</b> ${place(o)}</span><span class="arr">→</span><span><b>${esc(apCode(d))}</b> ${place(d)}</span>
+    ${fr.airline ? `<span class="al">${esc(fr.airline)}</span>` : ''}</div>`;
+}
+
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const el = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
 const altColor = alt => typeof alt !== 'number' ? '#7D8796' : alt < 6000 ? '#F5A65B' : alt < 15000 ? '#E8689A' : alt < 30000 ? '#8B7CFF' : '#4FD1E8';
@@ -286,6 +301,7 @@ async function openDetail(hex) {
       <div class="d-top"><span>Aircraft detail</span><button id="d-close" aria-label="Close detail">×</button></div>
       <div class="d-title"><b>${esc(d.tail || '—')}</b><span>${esc(d.hex)}</span></div>
       <div class="d-sub">${esc([d.type, d.manufacturer].filter(Boolean).join(' · ') || 'Not in the aircraft database')}</div>
+      ${routeHtml(d.flightroute)}
       <div class="d-sub mono" style="font-size:12px">${esc(a && a.callsigns.length ? a.callsigns.map(([f, n]) => `${f} ×${n}`).join(', ') : 'no callsign')}</div>
       <div class="photo" ${photo ? `style="background-image:url('${esc(photo.url).replace(/'/g, '%27')}')"` : ''}>${photo ? `<span>${photo.source === 'real' ? 'actual aircraft' : 'stock photo, type match'}${photo.credit ? ' — ' + esc(photo.credit) : ''}</span>` : '<span>No photo</span>'}</div>
       <div class="facts">${facts.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>
