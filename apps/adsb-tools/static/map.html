@@ -320,7 +320,7 @@ function altColor(alt) {
 function fmtAlt(alt) {
   if (alt == null) return '—';
   if (typeof alt !== 'number') return String(alt);
-  return alt >= 18000 ? 'FL' + Math.round(alt / 100) : Math.round(alt).toLocaleString() + ' ft';
+  return Math.round(alt).toLocaleString() + ' ft';
 }
 const fmtKm = km => km < 10 ? km.toFixed(1) : km.toFixed(0);
 

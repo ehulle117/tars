@@ -185,7 +185,7 @@ const fmtTime = ts => {
   return days === 0 ? `Today ${t}` : days === 1 ? `Yesterday ${t}` : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 };
 const fmtDur = s => s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`;
-const fmtAlt = v => v == null ? '—' : v >= 18000 ? 'FL' + Math.round(v / 100) : `${Math.round(v).toLocaleString()} ft`;
+const fmtAlt = v => v == null ? '—' : `${Math.round(v).toLocaleString()} ft`;
 const fmtSpd = v => v == null ? '—' : `${Math.round(v)} kt`;
 const fmtKm = v => v == null ? '—' : `${v.toFixed(2)} km`;
 
