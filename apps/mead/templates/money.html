@@ -1,22 +1,47 @@
 {% extends "base.html" %}
 {% block title %}Who paid · Mead Log{% endblock %}
+{% block head %}
+<style>
+  .people { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+  .avatar { width: 2.2rem; height: 2.2rem; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+            background: var(--accent-bg); color: var(--accent); font-weight: 700; flex: none; }
+  .avatar.sm { width: 1.8rem; height: 1.8rem; font-size: .85rem; }
+  .mhead { display: flex; justify-content: space-between; gap: 1rem; padding: .8rem 1.25rem; background: var(--surface-2);
+           color: var(--fg); font-weight: 600; list-style: none; }
+  .mhead::-webkit-details-marker { display: none; }
+  .prow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .8rem; align-items: center; padding: .65rem 1.25rem; border-top: 1px solid var(--line); }
+  .month { margin-bottom: .75rem; }
+</style>
+{% endblock %}
 {% block body %}
-<h1 style="margin:.25rem 0">Who paid</h1>
-<p class="muted">Shared brewing costs, split evenly between everyone listed. "Paid by" on Inventory and on a batch's Add cost adds purchases here too.</p>
+<h1 style="margin-bottom:.4rem">Who paid</h1>
+<p class="muted" style="margin-top:0">Shared brewing costs, split evenly between everyone listed. "Paid by" on Inventory and on a batch's Add cost adds purchases here too.</p>
 
-{% if settle %}<section class="task due" style="flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.75rem">
-  <span style="font-size:1.3rem"><b style="font-size:inherit">{{ settle.from }} owes {{ settle.to }} {{ "$%.2f"|format(settle.amount) }}</b> <span class="muted" style="font-size:.95rem">to even out</span></span>
+{% if settle %}<section class="task due" style="flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;padding:1.25rem 1.4rem;margin-bottom:1rem">
+  <div>
+    <div class="small" style="font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--accent)">To even out</div>
+    <div style="font-size:1.8rem;font-weight:700;letter-spacing:-.01em">{{ settle.from }} owes {{ settle.to }} {{ "$%.2f"|format(settle.amount) }}</div>
+    <div class="soft">{{ spent|money }} spent together · split evenly</div>
+  </div>
   <form class="inline" method="post" action="/money" onsubmit="return confirm('Record {{ settle.from|e }} paying {{ settle.to|e }} {{ "$%.2f"|format(settle.amount) }}?')">
     <input type="hidden" name="paid_by" value="{{ settle.from }}"><input type="hidden" name="paid_to" value="{{ settle.to }}">
     <input type="hidden" name="amount" value="{{ '%.2f'|format(settle.amount) }}"><input type="hidden" name="item" value="Settle up">
     <button>Record {{ settle.from }} paying {{ "$%.2f"|format(settle.amount) }}</button>
   </form>
-</section>{% elif bal|length == 2 %}<p class="muted">All square.</p>{% endif %}
-{% if rows %}<section class="stats">
-  <div><small>Spent together</small><b>{{ "$%.2f"|format(spent) }}</b></div>
-  {% if unassigned %}<div><small>Unassigned (not split yet)</small><b>{{ "$%.2f"|format(unassigned) }}</b></div>{% endif %}
-  {% for p, v in bal.items() %}<div><small>{{ p }}</small><b>{% if v > 0.005 %}is owed {{ "$%.2f"|format(v) }}{% elif v < -0.005 %}owes {{ "$%.2f"|format(-v) }}{% else %}even{% endif %}</b></div>{% endfor %}
-</section>{% endif %}
+</section>{% elif bal|length == 2 %}<section><b>All square.</b> <span class="muted">{{ spent|money }} spent together, split evenly.</span></section>{% endif %}
+
+{% if bal %}<div class="people">
+  {% for p, v in bal.items() %}{% set paid = people.get(p, 0) %}
+  <section style="display:flex;flex-direction:column;gap:.55rem;margin:0">
+    <div style="display:flex;align-items:center;gap:.6rem"><span class="avatar" aria-hidden="true">{{ p[:1]|upper }}</span><b style="font-size:1.05rem">{{ p }}</b>
+      <span class="pill {{ 'info' if v > 0.005 else ('warn' if v < -0.005 else '') }}" style="margin-left:auto">{% if v > 0.005 %}is owed {{ "$%.2f"|format(v) }}{% elif v < -0.005 %}owes {{ "$%.2f"|format(-v) }}{% else %}even{% endif %}</span></div>
+    <div style="display:flex;justify-content:space-between"><span class="muted">Paid</span><b class="num">{{ "$%.2f"|format(paid) }}</b></div>
+    <div aria-hidden="true" style="height:8px;border-radius:4px;background:var(--line);overflow:hidden"><div style="height:100%;width:{{ (paid / spent * 100)|round(1) if spent else 0 }}%;background:var(--accent-fill)"></div></div>
+    <div class="small" style="display:flex;justify-content:space-between"><span class="muted">Fair share</span><span class="num">{{ "$%.2f"|format(share) }}</span></div>
+  </section>
+  {% endfor %}
+</div>{% endif %}
+{% if unassigned %}<section class="stats" style="margin-top:1rem"><div><small>Unassigned (not split yet)</small><b>{{ "$%.2f"|format(unassigned) }}</b></div></section>{% endif %}
 
 {% if editing %}
 <form method="post" action="/money/save">
@@ -40,32 +65,53 @@
 </section>
 </form>
 {% else %}
-<section>
-<h2 style="margin-top:0">Add a payment</h2>
-<form class="row" method="post" action="/money">
-  <label>Date<input name="paid_on" type="date" value="{{ today }}"></label>
-  <label>Paid by<input name="paid_by" list="payers" required size="9"></label>
-  <label>For<input name="item" placeholder="60 lb honey"></label>
-  <label>Amount $<input name="amount" type="number" step="0.01" min="0.01" required></label>
-  <label>Paying back<input name="paid_to" list="payers" placeholder="only if repaying" size="11"></label>
-  <label>Note<input name="note"></label>
-  <button>Add</button>
-</form>
-<p class="muted" style="font-size:.85rem">To settle up, fill in "Paying back" with who got the money (e.g. Gabe paid back Ethan). That moves the balance without counting as a brewing cost.</p>
-</section>
+<div style="display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;justify-content:space-between;margin:1.5rem 0 .75rem">
+  <h2 style="margin:0">Payments</h2>
+  <div id="pay-who" style="display:flex;gap:.35rem;flex-wrap:wrap;align-items:center">
+    <button type="button" class="pill accent" data-who="">All</button>
+    {% for p in bal %}<button type="button" class="pill" data-who="{{ p }}">{{ p }}</button>{% endfor %}
+    {% if unassigned %}<button type="button" class="pill" data-who="-">Unassigned</button>{% endif %}
+    {% if rows %}<a class="btn ghost" href="/money?edit=1" style="margin-left:.4rem">Edit</a>{% endif %}
+  </div>
+</div>
 
-<form class="row" method="get" action="/money" style="justify-content:flex-end;margin:0 0 .5rem">
-  {% if rows %}<input type="hidden" name="edit" value="1"><button>Edit</button>{% endif %}
-</form>
-<section class="scroll">
-<table>
-  <tr><th>Date</th><th>Paid by</th><th>For</th><th>Amount</th><th>Note</th></tr>
-  {% for r in rows %}<tr>
-    <td>{{ r.paid_on }}</td><td>{{ r.paid_by or "—" }}</td>
-    <td class="wrap">{% if r.paid_to %}Paid back {{ r.paid_to }}{% if r.item != "Paid back" %}: {{ r.item }}{% endif %}{% else %}{{ r.item }}{% endif %}{% if r.batch_name %} <a class="badge" href="/batch/{{ r.batch_id }}">{{ r.batch_name }}</a>{% endif %}</td>
-    <td class="num">{{ "$%.2f"|format(r.amount) }}</td><td class="wrap">{{ r.note or "" }}</td>
-  </tr>{% else %}<tr><td colspan="5" class="muted">No payments yet.</td></tr>{% endfor %}
-</table>
-</section>
+<details class="card" id="add-payment">
+  <summary>Add a payment</summary>
+  <form class="row" method="post" action="/money">
+    <label>Date<input name="paid_on" type="date" value="{{ today }}"></label>
+    <label>Paid by<input name="paid_by" list="payers" required size="9"></label>
+    <label>For<input name="item" placeholder="60 lb honey"></label>
+    <label>Amount $<input name="amount" type="number" step="0.01" min="0.01" required></label>
+    <label>Paying back<input name="paid_to" list="payers" placeholder="only if repaying" size="11"></label>
+    <label>Note<input name="note"></label>
+    <button>Add</button>
+  </form>
+  <p class="muted small" style="margin-bottom:0">To settle up, fill in "Paying back" with who got the money (e.g. Gabe paid back Ethan). That moves the balance without counting as a brewing cost.</p>
+</details>
+
+{% for m in months %}
+<details class="card month" {{ "open" if loop.index <= 2 }} style="padding:0;overflow:hidden">
+  <summary class="mhead"><span>{{ m.label }} <span class="muted" style="font-weight:400">· {{ m.rows|length }} payment{{ "s" if m.rows|length != 1 }}</span></span><span class="num">{{ m.total|money }}</span></summary>
+  {% for r in m.rows %}
+  <div class="prow" data-who="{{ r.paid_by or '-' }}">
+    <span class="avatar sm" aria-hidden="true">{{ (r.paid_by or "?")[:1]|upper }}</span>
+    <span style="min-width:0">{% if r.paid_to %}<b>{{ r.paid_by }}</b> paid back {{ r.paid_to }}{% if r.item not in ("Paid back", "Settle up") %}: {{ r.item }}{% endif %}{% else %}{{ r.item }}{% endif %}
+      {% if r.batch_name %}<a class="badge" href="/batch/{{ r.batch_id }}">{{ r.batch_name }}</a>{% endif %}
+      <span class="muted small" style="display:block">{{ r.paid_on }} · {{ r.paid_by or "nobody yet" }}{% if r.note %} · {{ r.note }}{% endif %}</span></span>
+    <b class="num">{{ "$%.2f"|format(r.amount) }}</b>
+  </div>
+  {% endfor %}
+</details>
+{% else %}<p class="muted">No payments yet.</p>{% endfor %}
+
+<script>
+  // narrow the ledger to one person's payments; nothing is saved
+  const whoChips = document.querySelectorAll("#pay-who button");
+  whoChips.forEach(b => b.addEventListener("click", () => {
+    whoChips.forEach(x => x.classList.toggle("accent", x === b));
+    document.querySelectorAll(".prow").forEach(r => r.hidden = !!b.dataset.who && r.dataset.who !== b.dataset.who);
+    document.querySelectorAll(".month").forEach(m => { if (b.dataset.who) m.open = !!m.querySelector(".prow:not([hidden])"); });
+  }));
+</script>
 {% endif %}
 {% endblock %}

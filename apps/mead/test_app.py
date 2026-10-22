@@ -26,10 +26,10 @@ def test_recipe_to_batch_flow():
     for _ in range(4):
         c.post(f"/batch/{bid}/event", data={"kind": "nutrient"})
     c.post(f"/batch/{bid}/reading", data={"taken_on": "2026-10-05", "sg": "1.050"})
-    assert "Re-check gravity on" in c.get("/").text and "<td>Fermenting</td>" in c.get("/").text
+    assert "Re-check gravity on" in c.get("/").text and "Primary · fermenting</span>" in c.get("/").text
     c.post(f"/batch/{bid}/reading", data={"taken_on": "2026-10-12", "sg": "1.040"})
     c.post(f"/batch/{bid}/reading", data={"taken_on": "2026-10-19", "sg": "1.040"})
-    assert "<td>Possibly stuck</td>" in c.get("/").text and "check for a stuck fermentation" in c.get("/").text
+    assert "· possibly stuck</span>" in c.get("/").text and "check for a stuck fermentation" in c.get("/").text
     c.post(f"/batch/{bid}/save-recipe")
     assert c.get("/recipes").text.count("Basic Traditional") == 2
 
@@ -184,7 +184,7 @@ def test_who_paid():
     assert c.post("/money", data={"paid_by": "Gabe", "paid_to": "Gabe", "amount": "10"}).status_code == 400
     c.post("/money", data={"paid_by": "Gabe", "paid_to": "Ethan", "amount": "10"})  # settle up
     page = c.get("/money").text
-    assert "$100.00" in page and page.count(">even<") == 2 and "Paid back Ethan" in page
+    assert "$100.00" in page and page.count(">even<") == 2 and "paid back Ethan" in page
     assert '<option>Gabe</option>' in c.get("/inventory").text  # suggestions on other pages
 
 
@@ -217,7 +217,7 @@ def test_units_and_equipment():
     fk, scale = db("SELECT id FROM inventory WHERE name='Fermaid K'")[0], db("SELECT id FROM inventory WHERE name='Kitchen scale'")[0]
     assert db("SELECT item FROM payment WHERE amount=18")[0] == "Kitchen scale"  # not "1 each Kitchen scale"
     inv = c.get("/inventory").text
-    assert "<h2>Equipment" in inv and "equipment <b class=\"num\">$18.00</b>" in inv
+    assert '<h2 id="equipment">Equipment' in inv and "equipment <b class=\"num\" style=\"color:var(--fg)\">$18.00</b>" in inv
     assert '"equipment": "each"' in inv  # kind -> default unit map for Add item
     page = c.get(f"/batch/{bid}").text
     assert f'<option value="{fk}">' in page and f'<option value="{scale}">' not in page  # equipment isn't "used"
@@ -260,3 +260,41 @@ def test_up_next_batch_panel_and_settle_up():
     c.post("/money", data={"paid_by": "Gabe", "paid_to": "Ethan", "amount": "30.00", "item": "Settle up"})
     page = c.get("/money").text
     assert "owes Ethan" not in page and "All square." in page
+
+
+def test_redesign_pages():
+    from datetime import date, timedelta
+    today = date.today()
+    bid = int(c.post("/batch", data={"name": "cellar-check"}).url.path.split("/")[-1])
+    c.post(f"/batch/{bid}", data={"name": "cellar-check", "status": "secondary", "volume_gal": "1", "n_need": "low",
+                                  "nutrient_protocol": "recipe", "start_date": (today - timedelta(days=30)).isoformat()})
+    c.post(f"/batch/{bid}/reading", data={"taken_on": (today - timedelta(days=30)).isoformat(), "sg": "1.100"})
+    c.post(f"/batch/{bid}/event", data={"kind": "rack", "on_date": (today - timedelta(days=10)).isoformat(), "note": "to glass"})
+    c.post(f"/batch/{bid}/expense", data={"item": "3 lb clover honey", "amount": "12"})
+    c.post(f"/batch/{bid}/expense", data={"item": "airlock", "amount": "3"})
+    s = main.stats(main.db(), main.get_batch(main.db(), bid))
+    assert s["cost_parts"] == [("honey", 12), ("other", 3)]
+    assert [st["name"] for st in s["stages"] if st["done"]] == ["planned", "primary"] and s["stages"][2]["now"]
+    assert s["timeline"][0]["what"] == "Rack" and s["timeline"][0]["note"] == "to glass"
+
+    # quick log: pick a batch, save, land back with a confirmation
+    page = c.get("/log").text
+    assert f'value="{bid}"' in page and "Save reading" in page
+    r = c.post("/log", data={"batch_id": bid, "sg": "1.020", "taken_on": today.isoformat()})
+    assert "Saved for cellar-check" in r.text
+    assert c.post("/log", data={"batch_id": bid, "sg": "3"}).status_code == 400
+    assert main.stats(main.db(), main.get_batch(main.db(), bid))["spark"]  # two readings: a sparkline
+
+    # bottles filled -> real per-bottle cost in the cellar
+    c.post(f"/batch/{bid}", data={"name": "cellar-check", "status": "bottled", "volume_gal": "1", "n_need": "low",
+                                  "nutrient_protocol": "recipe", "bottles": "5", "bottle_date": today.isoformat()})
+    assert main.get_batch(main.db(), bid)["bottles"] == 5
+    home = c.get("/").text
+    assert "In the cellar" in home and "$3.00" in home  # $15 over 5 bottles
+    assert 'class="on">Batches' in home and 'href="/log"' in home
+
+
+def test_balances_ignore_row_order():
+    rows = [{"paid_by": "Ethan", "paid_to": None, "amount": a} for a in (0.1, 0.2, 830.55)] + \
+           [{"paid_by": "Gabe", "paid_to": None, "amount": 375.0}]
+    assert main.settle_up(rows) == main.settle_up(rows[::-1])  # half-cent splits round the same way

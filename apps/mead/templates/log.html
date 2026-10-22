@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Log a reading · Mead Log{% endblock %}
+{% block head %}
+<style>
+  .qlog { max-width: 460px; margin: 0 auto; display: flex; flex-direction: column; gap: 1.1rem; }
+  .pick { display: flex; flex-direction: row; align-items: center; gap: .8rem; padding: .8rem 1rem; border-radius: 14px; border: 1px solid var(--line);
+          background: var(--surface); color: var(--fg); font-size: 1rem; cursor: pointer; }
+  .pick:has(input:checked) { border: 2px solid var(--accent-fill); background: var(--accent-bg); }
+  input.big { font-size: 2.4rem; font-weight: 700; text-align: center; letter-spacing: .02em; width: 100%; min-height: 64px; }
+  .save { width: 100%; min-height: 56px; font-size: 1.1rem; }
+</style>
+{% endblock %}
+{% block body %}
+<form class="qlog" method="post" action="/log">
+  <h1>Log a reading</h1>
+  {% if saved %}<p class="pill info" style="align-self:flex-start;font-size:.9rem;padding:.35rem .8rem" role="status">Saved for {{ saved }}</p>{% endif %}
+  {% if rows %}
+  <fieldset style="border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:.5rem">
+    <legend class="muted small" style="margin-bottom:.5rem">Batch</legend>
+    {% for b, s in rows %}{% set last = s.reads[-1] if s.reads else none %}
+    <label class="pick">
+      <input type="radio" name="batch_id" value="{{ b.id }}" {{ "checked" if b.id == pick }} required>
+      <span style="flex:1"><b>{{ b.name }}</b><br><span class="muted small">{% if last %}last {{ "%.3f"|format(last.sg) }} · {{ last.taken_on }}{% else %}no readings yet{% endif %}{% if s.next %} · next: {{ s.next }}{% endif %}</span></span>
+    </label>
+    {% endfor %}
+  </fieldset>
+  <label>Gravity<input class="big" name="sg" type="number" inputmode="decimal" step="0.001" min="0.980" max="1.200" required placeholder="1.000"></label>
+  <div class="grid2" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+    <label>Temp °F<input name="temp_f" type="number" inputmode="decimal" step="0.1" placeholder="optional" style="width:100%"></label>
+    <label>Date<input name="taken_on" type="date" value="{{ today }}" style="width:100%"></label>
+  </div>
+  <label>Note<input name="note" placeholder="optional"></label>
+  <button class="save">Save reading</button>
+  {% else %}
+  <p class="muted">No batches are fermenting right now. <a href="/">Start one</a> first.</p>
+  {% endif %}
+</form>
+{% endblock %}

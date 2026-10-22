@@ -3,6 +3,7 @@ import os
 import sqlite3
 from datetime import date, datetime, timedelta
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -66,6 +67,8 @@ def db():
 
 with db() as _c:
     _c.executescript(SCHEMA)
+    if "bottles" not in [r[1] for r in _c.execute("PRAGMA table_info(batch)")]:  # added after launch
+        _c.execute("ALTER TABLE batch ADD COLUMN bottles INTEGER")
     seed.run(_c)
 
 app = FastAPI()
@@ -80,6 +83,7 @@ def payers() -> list:
 
 
 tpl.env.globals["payers"] = payers
+tpl.env.filters["money"] = lambda v: f"${v:,.2f}"  # $1,205.85
 
 
 def record_payment(con, f, amount, item, batch_id=None):
@@ -97,13 +101,49 @@ def balances(rows) -> dict:
     people = {r["paid_by"] for r in rows} | {r["paid_to"] for r in rows if r["paid_to"]}
     if not people:
         return {}
-    shared = sum(r["amount"] for r in rows if not r["paid_to"])
-    bal = {p: -shared / len(people) for p in people}
+    cents = lambda v: round(v * 100)  # noqa: E731 -- whole cents: the same answer whatever order rows come in
+    shared = sum(cents(r["amount"]) for r in rows if not r["paid_to"])
+    bal = {p: 0 for p in people}
     for r in rows:
-        bal[r["paid_by"]] += r["amount"]
+        bal[r["paid_by"]] += cents(r["amount"])
         if r["paid_to"]:
-            bal[r["paid_to"]] -= r["amount"]
-    return {p: round(v, 2) for p, v in sorted(bal.items())}
+            bal[r["paid_to"]] -= cents(r["amount"])
+    return {p: round((v - shared / len(people)) / 100, 2) for p, v in sorted(bal.items())}
+
+
+def settle_up(rows):
+    """(balances, who pays whom to even out or None). Two people only; rounded so both sides match."""
+    bal = balances(rows)
+    settle = None
+    if len(bal) == 2:
+        (debtor, owes), (creditor, _) = sorted(bal.items(), key=lambda kv: kv[1])
+        if owes < -0.005:
+            settle = {"from": debtor, "to": creditor, "amount": round(-owes, 2)}
+            bal[creditor] = settle["amount"]  # rounded separately they can differ by a cent
+    return bal, settle
+
+
+def spark(points, w=160, h=40) -> str:
+    """SVG polyline points for a gravity sparkline: [(iso date, sg), ...] scaled into w x h."""
+    if len(points) < 2:
+        return ""
+    t0 = date.fromisoformat(points[0][0])
+    xs = [(date.fromisoformat(d) - t0).days for d, _ in points]
+    lo, hi = min(sg for _, sg in points), max(sg for _, sg in points)
+    span_x, span_y = (xs[-1] or 1), (hi - lo or 0.001)
+    return " ".join(f"{4 + x / span_x * (w - 8):.1f},{4 + (hi - sg) / span_y * (h - 8):.1f}"
+                    for x, (_, sg) in zip(xs, points))
+
+
+STAGES = ["planned", "primary", "secondary", "stabilized", "aging", "bottled"]
+STAGE_POS = {"planned": 0, "primary": 1, "secondary": 2, "aging": 4, "bottled": 5, "archived": 5, "recipe": -1}
+COST_GROUPS = ["honey", "fruit", "yeast", "nutrient", "packaging", "other"]
+
+
+def cost_group(e) -> str:
+    """Bucket a batch cost line for the breakdown bar: the inventory kind when it came from stock, else a guess."""
+    k = e.get("inv_kind") or ("honey" if "honey" in e["item"].lower() else "other")
+    return k if k in COST_GROUPS else "other"
 
 
 def num(v) -> Optional[float]:
@@ -137,14 +177,15 @@ def stats(con, b) -> dict:
     reads = [dict(r) for r in con.execute("SELECT * FROM reading WHERE batch_id=? ORDER BY taken_on, id", (b["id"],))]
     for r in reads:
         r["sg_c"] = chem.temp_correct(r["sg"], r["temp_f"]) if r["temp_f"] else r["sg"]
-    evs = con.execute("SELECT kind, on_date FROM event WHERE batch_id=? ORDER BY on_date, id", (b["id"],)).fetchall()
+    evs = con.execute("SELECT kind, on_date, note FROM event WHERE batch_id=? ORDER BY on_date, id", (b["id"],)).fetchall()
     kinds = [e[0] for e in evs]
     stabilized = [e[1] for e in evs if e[0] == "stabilize"]
     est_og = chem.estimate_og(ings, b["volume_gal"] or 0)
     og = reads[0]["sg_c"] if reads else (est_og or b["target_og"])
     cur = reads[-1]["sg_c"] if len(reads) > 1 else None
     stable = chem.is_stable([(r["taken_on"], r["sg_c"]) for r in reads])
-    exps = [dict(r) for r in con.execute("SELECT * FROM expense WHERE batch_id=? ORDER BY spent_on, id", (b["id"],))]
+    exps = [dict(r) for r in con.execute("SELECT e.*, i.kind AS inv_kind FROM expense e LEFT JOIN inventory i "
+                                          "ON i.id = e.inventory_id WHERE batch_id=? ORDER BY spent_on, e.id", (b["id"],))]
     cost = sum(e["amount"] for e in exps)
     s = {"ings": ings, "reads": reads, "expenses": exps, "cost": cost, "est_og": est_og, "og": og, "cur": cur, "stable": stable,
          "nutrient_done": kinds.count("nutrient"), "state": None, "next": None, "next_link": None,
@@ -169,6 +210,27 @@ def stats(con, b) -> dict:
     if cost and b["volume_gal"]:
         s["cost_gal"] = cost / b["volume_gal"]
         s["cost_bottle"] = s["cost_gal"] / BOTTLES_PER_GAL
+    if cost and b["bottles"]:
+        s["per_bottle"] = cost / b["bottles"]  # actual bottles filled beats the 750 mL estimate
+    s["spark"] = spark([(r["taken_on"], r["sg_c"]) for r in reads])
+    groups = {}
+    for e in exps:
+        groups[cost_group(e)] = groups.get(cost_group(e), 0) + e["amount"]
+    s["cost_parts"] = [(g, groups[g]) for g in COST_GROUPS if groups.get(g)]
+    # the brewing stages, ticked off from status and the log
+    first = {}
+    for k, d, _ in evs:
+        first.setdefault(k, d)
+    pos = STAGE_POS.get(b["status"], 0)
+    dates = {"primary": b["start_date"], "secondary": first.get("rack"), "stabilized": first.get("stabilize"),
+             "bottled": b["bottle_date"] or first.get("bottle")}
+    s["stages"] = [{"name": st, "date": dates.get(st), "now": i == pos,
+                    "done": i < pos or (st == "stabilized" and "stabilize" in kinds)} for i, st in enumerate(STAGES)]
+    # newest first: readings and log entries together
+    tl = [{"on": r["taken_on"], "what": f"Reading {r['sg']:.3f}" + (f" at {r['temp_f']:g}°F" if r["temp_f"] else ""),
+           "note": r["note"]} for r in reads]
+    tl += [{"on": d, "what": k.capitalize(), "note": n} for k, d, n in evs]
+    s["timeline"] = sorted(tl, key=lambda t: t["on"], reverse=True)
     if b["start_date"]:
         s["days"] = (date.today() - date.fromisoformat(b["start_date"])).days
     s["state"], s["next"], s["next_link"], s["due"], s["done_kind"] = next_action(
@@ -225,10 +287,26 @@ def index(request: Request):
         groups = {st: [] for st in STATUSES[:-1]}
         for b in rows:
             groups[b["status"]].append((b, stats(con, b)))
+        payments = con.execute("SELECT * FROM payment").fetchall()
+        out = con.execute("SELECT name FROM inventory WHERE kind IS NOT 'equipment' AND qty <= 0.005 "
+                          "ORDER BY name").fetchall()
+        unpriced = con.execute("SELECT COUNT(*) FROM inventory WHERE kind IS NOT 'equipment' AND qty > 0.005 "
+                               "AND (unit_cost IS NULL OR unit_cost = 0)").fetchone()[0]
+        bottles = con.execute("SELECT COALESCE(SUM(qty), 0) FROM inventory WHERE kind='packaging' "
+                              "AND lower(name) LIKE '%bottle%'").fetchone()[0]
+        made = con.execute("SELECT SUM(bottles), SUM(volume_gal) FROM batch WHERE bottles > 0 "
+                           "AND volume_gal > 0").fetchone()
     upnext = sorted(((b, s) for g in groups.values() for b, s in g if s["next"]),
                     key=lambda bs: bs[1]["due"] or date.max)
-    return tpl.TemplateResponse(request, "index.html", {"groups": groups, "upnext": upnext,
-                                                        "today": date.today()})
+    active = [bs for st in ("primary", "secondary", "aging") for bs in groups[st]]
+    per_gal = made[0] / made[1] if made[0] else BOTTLES_PER_GAL  # your own past yield, once there is one
+    shelf = {"out": [r[0] for r in out], "unpriced": unpriced, "bottles": bottles,
+             "need": round(sum(b["volume_gal"] or 0 for b, _ in active) * per_gal)}
+    bal, settle = settle_up(payments)
+    return tpl.TemplateResponse(request, "index.html", {
+        "groups": groups, "upnext": upnext, "active": active, "today": date.today(), "shelf": shelf,
+        "settle": settle, "spent": sum(p["amount"] for p in payments if not p["paid_to"]),
+        "cellar": groups["bottled"] + groups["archived"], "planned": groups["planned"]})
 
 
 @app.get("/recipes")
@@ -263,7 +341,7 @@ def batch_view(request: Request, bid: int):
         events = con.execute("SELECT * FROM event WHERE batch_id=? ORDER BY on_date, id", (bid,)).fetchall()
     return tpl.TemplateResponse(request, "batch.html", {
         "b": b, "s": s, "events": events, "statuses": STATUSES, "kinds": KINDS, "event_kinds": EVENTS, "units": UNITS,
-        "stock": con.execute("SELECT * FROM inventory WHERE qty > 0 AND kind IS NOT 'equipment' "
+        "stock": con.execute("SELECT * FROM inventory WHERE qty > 0.005 AND kind IS NOT 'equipment' "
                              "ORDER BY kind, name").fetchall(),
         "n_needs": list(chem.N_FACTOR), "protocols": PROTOCOLS, "today": date.today().isoformat()})
 
@@ -278,11 +356,12 @@ async def batch_update(bid: int, request: Request):
         get_batch(con, bid)
         con.execute("""UPDATE batch SET name=?, status=?, style=?, volume_gal=?, yeast=?, n_need=?,
                        nutrient_protocol=?, goferm=?, start_date=?, bottle_date=?, target_og=?, target_fg=?,
-                       target_fg_max=?, source_url=?, notes=? WHERE id=?""",
+                       target_fg_max=?, source_url=?, notes=?, bottles=? WHERE id=?""",
                     (f["name"], f["status"], f.get("style"), num(f.get("volume_gal")), f.get("yeast"), f["n_need"],
                      f["nutrient_protocol"], 1 if f.get("goferm") else 0, f.get("start_date") or None,
                      f.get("bottle_date") or None, num(f.get("target_og")), num(f.get("target_fg")),
-                     num(f.get("target_fg_max")), f.get("source_url") or None, f.get("notes"), bid))
+                     num(f.get("target_fg_max")), f.get("source_url") or None, f.get("notes"),
+                     int(num(f.get("bottles"))) if num(f.get("bottles")) else None, bid))
     return back(f"/batch/{bid}")
 
 
@@ -351,6 +430,30 @@ async def add_reading(bid: int, request: Request):
                     (bid, f.get("taken_on") or date.today().isoformat(), sg, num(f.get("temp_f")),
                      num(f.get("ph")), f.get("note")))
     return back(f"/batch/{bid}")
+
+
+@app.get("/log")
+def quick_log(request: Request):
+    """Phone-sized: pick an active batch, type the gravity, save."""
+    with db() as con:
+        rows = [(b, stats(con, b)) for b in con.execute(
+            "SELECT * FROM batch WHERE status IN ('primary', 'secondary', 'aging') ORDER BY start_date DESC, id DESC")]
+    pick = request.query_params.get("batch")
+    return tpl.TemplateResponse(request, "log.html", {
+        "rows": rows, "pick": int(pick) if (pick or "").isdigit() else (rows[0][0]["id"] if rows else None),
+        "saved": request.query_params.get("saved"), "today": date.today().isoformat()})
+
+
+@app.post("/log")
+async def quick_log_save(request: Request):
+    f = await request.form()
+    bid = num(f.get("batch_id"))
+    if bid is None:
+        raise HTTPException(400, "pick a batch")
+    await add_reading(int(bid), request)  # same checks and insert as the batch page
+    with db() as con:
+        name = get_batch(con, int(bid))["name"]
+    return back(f"/log?batch={int(bid)}&saved={quote(name)}")
 
 
 @app.post("/batch/{bid}/event")
@@ -494,15 +597,21 @@ def money(request: Request):
                            "ORDER BY p.paid_on DESC, p.id DESC").fetchall()
     spent = sum(r["amount"] for r in rows if not r["paid_to"])
     unassigned = sum(r["amount"] for r in rows if not r["paid_by"])
-    bal = balances(rows)
-    settle = None  # two people: who pays whom to even out
-    if len(bal) == 2:
-        (debtor, owes), (creditor, _) = sorted(bal.items(), key=lambda kv: kv[1])
-        if owes < -0.005:
-            settle = {"from": debtor, "to": creditor, "amount": round(-owes, 2)}
-            bal[creditor] = settle["amount"]  # rounded separately they can differ by a cent
+    bal, settle = settle_up(rows)
+    people = {}
+    for r in rows:  # what each person put toward shared costs, for the person cards
+        if r["paid_by"] and not r["paid_to"]:
+            people[r["paid_by"]] = people.get(r["paid_by"], 0) + r["amount"]
+    months = []
+    for r in rows:  # already newest first
+        key = r["paid_on"][:7]
+        if not months or months[-1]["key"] != key:
+            months.append({"key": key, "label": date.fromisoformat(key + "-01").strftime("%B %Y"), "rows": [], "total": 0})
+        months[-1]["rows"].append(r)
+        months[-1]["total"] += r["amount"] if not r["paid_to"] else 0
     return tpl.TemplateResponse(request, "money.html", {
         "rows": rows, "bal": bal, "settle": settle, "spent": spent, "unassigned": unassigned,
+        "people": dict(sorted(people.items())), "share": spent / len(bal) if bal else 0, "months": months,
         "editing": "edit" in request.query_params, "today": date.today().isoformat()})
 
 

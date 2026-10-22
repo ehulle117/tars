@@ -1,12 +1,77 @@
 {% extends "base.html" %}
 {% block title %}{{ b.name }} · Mead Log{% endblock %}
-{% block head %}<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>{% endblock %}
+{% block head %}<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  .crumb { font-size: .9rem; color: var(--muted); text-decoration: none; }
+  .bhead { display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: flex-start; justify-content: space-between; margin: .4rem 0 1.25rem; }
+  .bhead .meta { color: var(--muted); margin-top: .2rem; }
+  .menu { position: relative; }
+  .menu > summary { list-style: none; }
+  .menu > summary::-webkit-details-marker { display: none; }
+  .menu .items { position: absolute; right: 0; top: calc(100% + .4rem); z-index: 5; min-width: 220px; display: flex; flex-direction: column;
+                 gap: .35rem; padding: .6rem; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 12px; }
+  .menu .items form, .menu .items a { display: block; }
+  .menu .items button, .menu .items a { width: 100%; justify-content: flex-start; }
+  .stepper { list-style: none; margin: 0 0 1.25rem; padding: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .4rem; }
+  .stepper li { display: flex; flex-direction: column; gap: .35rem; font-size: .82rem; color: var(--muted); }
+  .stepper li::before { content: ""; height: 6px; border-radius: 3px; background: var(--line); }
+  .stepper li.done::before, .stepper li.now::before { background: var(--accent-fill); }
+  .stepper li.done { color: var(--soft); }
+  .stepper li.now { color: var(--fg); font-weight: 600; }
+  .secnav { display: flex; flex-wrap: wrap; gap: .1rem; border-bottom: 1px solid var(--line); margin: 1.25rem 0 1rem; }
+  .secnav a { padding: .55rem .8rem; color: var(--muted); text-decoration: none; }
+  .secnav a:first-child { color: var(--fg); font-weight: 600; box-shadow: inset 0 -2px var(--accent-fill); }
+  .pair { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+  .pair > .wide { flex: 999 1 520px; min-width: 0; }
+  .pair > .narrow { flex: 1 1 300px; min-width: 0; }
+  .tl { display: grid; grid-template-columns: 5.2rem minmax(0, 1fr); gap: .25rem .75rem; }
+  .tl > * { padding: .45rem 0; border-top: 1px solid var(--line); }
+  .bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; gap: 2px; margin: .5rem 0 .75rem; }
+  .legend { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; font-size: .9rem; }
+  .legend i { display: inline-block; width: .7rem; height: .7rem; border-radius: 3px; margin-right: .35rem; vertical-align: -1px; }
+  section h2 { margin-top: 0; }
+  @media (max-width: 720px) { .stepper { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+</style>
+{% endblock %}
 {% block body %}
-<h1 style="margin:.25rem 0">{{ b.name }} <span class="muted" style="font-size:1rem">{{ b.status }}</span>{% if s.style_class %} <span class="badge">{{ s.style_class }}</span>{% endif %}</h1>
-{% if b.source_url %}<p class="muted">Source: <a href="{{ b.source_url }}" target="_blank" rel="noopener">{{ b.source_url }}</a></p>{% endif %}
-{% if b.status == "recipe" %}<form method="post" action="/batch/{{ b.id }}/clone"><button>Brew this →</button> <span class="muted">copies it into a planned batch</span></form>{% endif %}
+{% set cost_colors = {"honey": "#e8a93a", "fruit": "#d9862f", "yeast": "#c9bda5", "nutrient": "#9cc7f0", "packaging": "#6f8fae", "other": "#8a7f6a"} %}
+{% set ph = (s.reads|selectattr("ph")|map(attribute="ph")|list|last) if s.reads|selectattr("ph")|list else "" %}
+<a class="crumb" href="{{ '/recipes' if b.status == 'recipe' else '/' }}">← {{ "Recipes" if b.status == "recipe" else "Batches" }}</a>
+<div class="bhead">
+  <div style="min-width:0">
+    <h1>{{ b.name }}</h1>
+    <div class="meta">
+      {% if b.volume_gal %}{{ b.volume_gal }} gal {% endif %}{{ b.style or "" }}{% if b.yeast %} · {{ b.yeast }}{% endif %}{% if b.start_date %} · started {{ b.start_date }}{% endif %}{% if s.days is defined %} · day {{ s.days }}{% endif %}
+    </div>
+    <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.5rem">
+      <span class="pill accent">{{ b.status }}</span>{% if s.style_class %}<span class="pill">{{ s.style_class }}</span>{% endif %}{% if s.stable %}<span class="pill info">gravity stable</span>{% endif %}
+    </div>
+    {% if b.source_url %}<p class="muted small" style="margin:.5rem 0 0">Source: <a href="{{ b.source_url }}" target="_blank" rel="noopener">{{ b.source_url }}</a></p>{% endif %}
+  </div>
+  <div style="display:flex;gap:.5rem;align-items:center">
+    {% if b.status == "recipe" %}<form class="inline" method="post" action="/batch/{{ b.id }}/clone"><button>Brew this →</button></form>{% endif %}
+    <a class="btn ghost" href="#details" onclick="document.getElementById('details').open = true">Edit details</a>
+    <details class="menu">
+      <summary class="btn ghost" aria-label="More actions">More</summary>
+      <div class="items">
+        {% if b.status != "recipe" %}<form method="post" action="/batch/{{ b.id }}/clone"><button class="ghost">Clone as new batch</button></form>
+        <form method="post" action="/batch/{{ b.id }}/save-recipe"><button class="ghost">Save as recipe</button></form>
+        <a class="btn ghost" href="/calc{% if s.cur and b.volume_gal %}?b_cur={{ '%.3f'|format(s.cur) }}&b_vol={{ b.volume_gal }}&s_vol={{ b.volume_gal }}&ph={{ ph }}&abv={{ '%.1f'|format(s.abv) }}{% endif %}">Stabilize / backsweeten math</a>{% endif %}
+        <form method="post" action="/batch/{{ b.id }}/delete" onsubmit="return confirm('Delete {{ b.name|e }} and all its readings?')"><button class="danger">Delete {{ "recipe" if b.status == "recipe" else "batch" }}</button></form>
+      </div>
+    </details>
+  </div>
+</div>
+{% if b.status == "recipe" %}<p class="muted" style="margin-top:-.5rem">Brew this copies the recipe into a planned batch.</p>{% endif %}
+
+{% if b.status != "recipe" %}
+<ol class="stepper" aria-label="Stage">
+  {% for st in s.stages %}<li class="{{ 'done' if st.done }}{{ ' now' if st.now }}">{{ st.name|capitalize }}{% if st.date %} · {{ st.date[5:] }}{% endif %}</li>{% endfor %}
+</ol>
+{% endif %}
+
 {% if s.next %}
-<section id="log-reading" class="task{{ ' due' if s.due is not none and s.due.isoformat() <= today }}" style="margin-top:.75rem">
+<section id="log-reading" class="task{{ ' due' if s.due is not none and s.due.isoformat() <= today }}">
   <span class="when">{{ s.due_label }} · {{ s.state }}</span>
   <b class="next">{% if s.next_link %}<a href="{{ s.next_link }}" target="_blank" rel="noopener">{{ s.next }}</a>{% else %}{{ s.next }}{% endif %}</b>
   <div style="display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;align-items:end">
@@ -17,171 +82,191 @@
       <button>Save reading</button>
     </form>
     {% if s.done_kind %}<form class="inline" method="post" action="/batch/{{ b.id }}/event">
-      <input type="hidden" name="kind" value="{{ s.done_kind }}"><button>Mark done: {{ s.done_kind }}</button></form>{% endif %}
+      <input type="hidden" name="kind" value="{{ s.done_kind }}"><button class="ghost">Mark done: {{ s.done_kind }}</button></form>{% endif %}
   </div>
 </section>
 {% endif %}
 
-<section class="stats">
-  <div><small>OG{% if s.reads %} (measured){% elif s.est_og %} (est.){% else %} (target){% endif %}</small><b>{{ "%.3f"|format(s.og) if s.og else "—" }}</b></div>
-  <div><small>Current</small><b>{{ "%.3f"|format(s.cur) if s.cur else "—" }}</b></div>
+<section class="stats" style="margin-top:1rem">
+  <div><small>OG{% if s.reads %}{% elif s.est_og %} (est.){% else %} (target){% endif %}</small><b>{{ "%.3f"|format(s.og) if s.og else "—" }}</b></div>
+  <div><small>Now</small><b>{{ "%.3f"|format(s.cur) if s.cur else "—" }}</b></div>
   <div><small>ABV</small><b>{{ "%.1f%%"|format(s.abv) if s.abv is defined else "—" }}</b></div>
   <div><small>Attenuation</small><b>{{ "%.0f%%"|format(s.att) if s.att is defined else "—" }}</b></div>
-  <div><small>1/3 break</small><b>{{ "%.3f"|format(s["break"]) if s["break"] is defined else "—" }}</b></div>
-  <div><small>Day</small><b>{{ s.days if s.days is defined else "—" }}</b></div>
+  <div><small>Cost</small><b>{{ "$%.2f"|format(s.cost) if s.cost else "—" }}</b></div>
+  <div><small>{{ "Per bottle" if s.per_bottle is defined else "Per 750 mL (est.)" }}</small><b>{% if s.per_bottle is defined %}{{ "$%.2f"|format(s.per_bottle) }}{% elif s.cost_bottle is defined %}{{ "$%.2f"|format(s.cost_bottle) }}{% else %}—{% endif %}</b></div>
+  {% if s["break"] is defined %}<div><small>1/3 break</small><b>{{ "%.3f"|format(s["break"]) }}</b></div>{% endif %}
   {% if b.target_og %}<div><small>Target OG</small><b>{{ "%.3f"|format(b.target_og) }}</b></div>{% endif %}
   {% if b.target_fg %}<div><small>Target FG</small><b>{{ "%.3f"|format(b.target_fg) }}{% if b.target_fg_max %}–{{ "%.3f"|format(b.target_fg_max) }}{% endif %}</b></div>{% endif %}
   {% if s.est_og and (s.reads or b.target_og) %}<div><small>Recipe est. OG</small><b>{{ "%.3f"|format(s.est_og) }}</b></div>{% endif %}
-  {% if s.stable %}<div><small>Gravity</small><b>stable</b></div>{% endif %}
 </section>
 
-<section>
-<h2 style="margin-top:0">Details</h2>
-<form method="post" action="/batch/{{ b.id }}">
-  <div class="grid2">
-    <label>Name<input name="name" value="{{ b.name }}" required></label>
-    <label>Status<select name="status">{% for st in statuses %}<option {{ "selected" if st == b.status }}>{{ st }}</option>{% endfor %}</select></label>
-    <label>Style<input name="style" value="{{ b.style or '' }}" placeholder="traditional, melomel…" list="styles"></label>
-    <label>Volume (gal)<input name="volume_gal" type="number" step="0.01" value="{{ b.volume_gal or '' }}"></label>
-    <label>Yeast<input name="yeast" value="{{ b.yeast or '' }}" placeholder="71B, D47, EC-1118…"></label>
-    <label>Yeast N need<select name="n_need">{% for n in n_needs %}<option {{ "selected" if n == b.n_need }}>{{ n }}</option>{% endfor %}</select></label>
-    <label>Nutrients<select name="nutrient_protocol">{% for k, v in protocols.items() %}<option value="{{ k }}" {{ "selected" if k == b.nutrient_protocol }}>{{ v }}</option>{% endfor %}</select></label>
-    <label style="flex-direction:row;gap:.4rem;align-items:center">Rehydrated with GoFerm<input type="checkbox" name="goferm" {{ "checked" if b.goferm }}></label>
-    <label>Start / pitch<input name="start_date" type="date" value="{{ b.start_date or '' }}"></label>
-    <label>Bottled<input name="bottle_date" type="date" value="{{ b.bottle_date or '' }}"></label>
-    <label>Target OG<input name="target_og" type="number" step="0.001" value="{{ b.target_og or '' }}"></label>
-    <label>Target FG (min)<input name="target_fg" type="number" step="0.001" value="{{ b.target_fg or '' }}"></label>
-    <label>Target FG (max)<input name="target_fg_max" type="number" step="0.001" value="{{ b.target_fg_max or '' }}"></label>
-    <label>Source URL<input name="source_url" type="url" value="{{ b.source_url or '' }}"></label>
+<nav class="secnav" aria-label="Batch sections">
+  <a href="#overview">Overview</a><a href="#readings">Readings {{ s.reads|length }}</a><a href="#costs">Costs {{ s.expenses|length }}</a>
+  <a href="#ingredients">Ingredients {{ s.ings|length }}</a>{% if s.tosna %}<a href="#nutrients">Nutrients</a>{% endif %}<a href="#log">Log {{ events|length }}</a><a href="#details" onclick="document.getElementById('details').open = true">Details</a>
+</nav>
+
+<div class="pair" id="overview">
+  <section class="wide">
+    <h2>Gravity</h2>
+    {% if s.reads|length > 1 %}<canvas id="chart" height="120" role="img" aria-label="Gravity readings over time"></canvas>
+    {% else %}<p class="muted">The graph appears after two readings.</p>{% endif %}
+  </section>
+  <section class="narrow">
+    <h2>Timeline</h2>
+    {% if s.timeline %}<div class="tl">
+      {% for t in s.timeline[:6] %}<span class="muted small">{{ t.on }}</span><span>{{ t.what }}{% if t.note %} <span class="muted">· {{ t.note }}</span>{% endif %}</span>{% endfor %}
+    </div>{% if s.timeline|length > 6 %}<p class="small" style="margin:.5rem 0 0"><a href="#readings">Readings</a> and <a href="#log">Log</a> have the rest.</p>{% endif %}
+    {% else %}<p class="muted">Nothing logged yet.</p>{% endif %}
+  </section>
+</div>
+
+<section id="costs">
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:baseline;justify-content:space-between">
+    <h2>Costs</h2>
+    <p style="margin:0"><b class="num">{{ "$%.2f"|format(s.cost) }}</b> total{% if s.cost_gal is defined %} · <span class="num">{{ "$%.2f"|format(s.cost_gal) }}</span>/gal · <span class="num">{{ "$%.2f"|format(s.cost_bottle) }}</span> per 750 mL bottle{% endif %}{% if s.per_bottle is defined %} · <span class="num">{{ "$%.2f"|format(s.per_bottle) }}</span> per bottle filled{% endif %}</p>
   </div>
-  <label style="margin-top:.5rem">Notes<textarea name="notes" rows="3">{{ b.notes or '' }}</textarea></label>
-  <datalist id="styles">{% for x in ["traditional","melomel","cyser","pyment","metheglin","braggot","bochet","acerglyn","session"] %}<option>{{ x }}</option>{% endfor %}</datalist>
-  <p><button>Save</button></p>
-</form>
+  {% if s.cost_parts %}
+  <div class="bar" aria-hidden="true">{% for g, amt in s.cost_parts %}<div style="flex:{{ amt }};background:{{ cost_colors[g] }}"></div>{% endfor %}</div>
+  <div class="legend">{% for g, amt in s.cost_parts %}<span><i style="background:{{ cost_colors[g] }}"></i>{{ g|capitalize }} <b class="num">{{ "$%.2f"|format(amt) }}</b></span>{% endfor %}</div>
+  {% endif %}
+  {% if s.expenses %}<div class="scroll" style="margin-top:.75rem"><table>
+    <tr><th>Date</th><th>Item</th><th class="r">Amount</th><th>Note</th><th></th></tr>
+    {% for e in s.expenses %}<tr>
+      <td class="soft">{{ e.spent_on }}</td><td class="wrap">{{ e.item }}{% if e.inventory_id %} <span class="badge">from inventory</span>{% endif %}</td>
+      <td class="num r">{{ "$%.2f"|format(e.amount) }}</td><td class="wrap muted">{{ e.note or "" }}</td>
+      <td><form class="inline" method="post" action="/batch/{{ b.id }}/expense/{{ e.id }}/delete"><button class="link" title="Remove{{ ' (returns it to inventory)' if e.inventory_id }}">✕</button></form></td>
+    </tr>{% endfor %}
+  </table></div>{% endif %}
+  {% if stock %}<form class="row" method="post" action="/batch/{{ b.id }}/use">
+    <label>Use from inventory<select name="inventory_id">{% for i in stock %}<option value="{{ i.id }}">{{ i.name }} ({{ i.qty|round(2) }} {{ i.unit or "" }} on hand{% if i.unit_cost %}, ${{ "%.2f"|format(i.unit_cost) }}/{{ i.unit or "unit" }}{% endif %})</option>{% endfor %}</select></label>
+    <label>Qty<input name="qty" type="number" step="any" min="0" required></label>
+    <label>Unit<select name="unit"><option value="">same as stock</option>{% for u in units %}<option>{{ u }}</option>{% endfor %}</select></label>
+    <label>Date<input name="spent_on" type="date" value="{{ today }}"></label>
+    <button>Use</button>
+  </form>{% endif %}
+  <details style="margin-top:.75rem"><summary>Add a cost that isn't in inventory</summary>
+  <form class="row" method="post" action="/batch/{{ b.id }}/expense">
+    <label>Date<input name="spent_on" type="date" value="{{ today }}"></label>
+    <label>Item<input name="item" placeholder="15 lb wildflower honey" required></label>
+    <label>Amount $<input name="amount" type="number" step="0.01" min="0" required></label>
+    <label>Note<input name="note"></label>
+    <label>Paid by<input name="paid_by" list="payers" placeholder="optional" size="9"></label>
+    <button>Add cost</button>
+  </form></details>
+  <p class="muted small" style="margin-bottom:0">"Use" takes it out of <a href="/inventory">inventory</a> and charges it to this batch at its average cost; Unit converts weights (g, oz, lb, kg) and volumes (ml, tsp, gal…), so weigh powders on the scale. Removing that line puts it back. Equipment isn't listed: it's kept, not used up.</p>
 </section>
 
-<section>
-<h2 style="margin-top:0">Ingredients</h2>
-<div class="scroll"><table>
-  <tr><th>Kind</th><th>Name</th><th>Amount</th><th>PPG</th><th>Added</th><th></th></tr>
-  {% for i in s.ings %}<tr>
-    <td>{{ i.kind }}</td><td>{{ i.name or "" }}</td><td class="num">{{ i.amount|round(3) }} {{ i.unit }}</td>
-    <td class="num">{{ i.ppg or "" }}</td><td>{{ i.added_on or "" }}</td>
-    <td><form class="inline" method="post" action="/batch/{{ b.id }}/ingredient/{{ i.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
-  </tr>{% endfor %}
-</table></div>
-<form class="row" method="post" action="/batch/{{ b.id }}/ingredient">
-  <label>Kind<select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
-  <label>Name<input name="name" placeholder="orange blossom"></label>
-  <label>Amount<input name="amount" type="number" step="any" required></label>
-  <label>Unit<select name="unit">{% for u in units %}<option>{{ u }}</option>{% endfor %}</select></label>
-  <label>PPG<input name="ppg" type="number" step="any" placeholder="honey: 35"></label>
-  <label>Added<input name="added_on" type="date"></label>
-  <button>Add</button>
-</form>
-<p class="muted" style="font-size:.85rem">PPG = gravity points per lb per gallon (honey defaults to 35; fruit ~4–8), or for liquids, points per gallon of that liquid (apple juice ~50). Items without a PPG don't count toward est. OG.</p>
+<section id="readings">
+  <h2>Readings</h2>
+  <div class="scroll"><table>
+    <tr><th>Date</th><th class="r">SG</th><th class="r">°F</th><th class="r">Corrected</th><th class="r">pH</th><th>Note</th><th></th></tr>
+    {% for r in s.reads %}<tr>
+      <td class="soft">{{ r.taken_on }}</td><td class="num r">{{ "%.3f"|format(r.sg) }}</td><td class="num r">{{ r.temp_f or "" }}</td>
+      <td class="num r">{{ "%.4f"|format(r.sg_c) }}</td><td class="num r">{{ r.ph or "" }}</td><td class="wrap muted">{{ r.note or "" }}</td>
+      <td><form class="inline" method="post" action="/batch/{{ b.id }}/reading/{{ r.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
+    </tr>{% else %}<tr><td colspan="7" class="muted">No readings yet.</td></tr>{% endfor %}
+  </table></div>
+  <form class="row" method="post" action="/batch/{{ b.id }}/reading">
+    <label>Date<input name="taken_on" type="date" value="{{ today }}"></label>
+    <label>SG<input name="sg" type="number" step="0.001" min="0.980" max="1.200" required></label>
+    <label>Temp °F<input name="temp_f" type="number" step="0.1"></label>
+    <label>pH<input name="ph" type="number" step="0.01"></label>
+    <label>Note<input name="note"></label>
+    <button>Add reading</button>
+  </form>
+  <p class="muted small" style="margin-bottom:0">First reading is treated as OG. Temp corrects to a 60°F hydrometer.</p>
 </section>
 
-<section>
-<h2 style="margin-top:0">Readings</h2>
-{% if s.reads|length > 1 %}<canvas id="chart" height="110"></canvas>{% endif %}
-<div class="scroll"><table>
-  <tr><th>Date</th><th>SG</th><th>°F</th><th>Corrected</th><th>pH</th><th>Note</th><th></th></tr>
-  {% for r in s.reads %}<tr>
-    <td>{{ r.taken_on }}</td><td class="num">{{ "%.3f"|format(r.sg) }}</td><td class="num">{{ r.temp_f or "" }}</td>
-    <td class="num">{{ "%.4f"|format(r.sg_c) }}</td><td class="num">{{ r.ph or "" }}</td><td class="wrap">{{ r.note or "" }}</td>
-    <td><form class="inline" method="post" action="/batch/{{ b.id }}/reading/{{ r.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
-  </tr>{% endfor %}
-</table></div>
-<form class="row" method="post" action="/batch/{{ b.id }}/reading">
-  <label>Date<input name="taken_on" type="date" value="{{ today }}"></label>
-  <label>SG<input name="sg" type="number" step="0.001" min="0.980" max="1.200" required></label>
-  <label>Temp °F<input name="temp_f" type="number" step="0.1"></label>
-  <label>pH<input name="ph" type="number" step="0.01"></label>
-  <label>Note<input name="note"></label>
-  <button>Add reading</button>
-</form>
-<p class="muted" style="font-size:.85rem">First reading is treated as OG. Temp corrects to a 60°F hydrometer.</p>
-</section>
-
-<section>
-<h2 style="margin-top:0">Costs</h2>
-<p><b class="num">{{ "$%.2f"|format(s.cost) }}</b> total{% if s.cost_gal is defined %} · <span class="num">{{ "$%.2f"|format(s.cost_gal) }}</span>/gal · <span class="num">{{ "$%.2f"|format(s.cost_bottle) }}</span> per 750 mL bottle{% endif %}</p>
-{% if s.expenses %}<div class="scroll"><table>
-  <tr><th>Date</th><th>Item</th><th>Amount</th><th>Note</th><th></th></tr>
-  {% for e in s.expenses %}<tr>
-    <td>{{ e.spent_on }}</td><td class="wrap">{{ e.item }}{% if e.inventory_id %} <span class="badge">from inventory</span>{% endif %}</td>
-    <td class="num">{{ "$%.2f"|format(e.amount) }}</td><td class="wrap">{{ e.note or "" }}</td>
-    <td><form class="inline" method="post" action="/batch/{{ b.id }}/expense/{{ e.id }}/delete"><button class="link" title="Remove{{ ' (returns it to inventory)' if e.inventory_id }}">✕</button></form></td>
-  </tr>{% endfor %}
-</table></div>{% endif %}
-<form class="row" method="post" action="/batch/{{ b.id }}/expense">
-  <label>Date<input name="spent_on" type="date" value="{{ today }}"></label>
-  <label>Item<input name="item" placeholder="15 lb wildflower honey" required></label>
-  <label>Amount $<input name="amount" type="number" step="0.01" min="0" required></label>
-  <label>Note<input name="note"></label>
-  <label>Paid by<input name="paid_by" list="payers" placeholder="optional" size="9"></label>
-  <button>Add cost</button>
-</form>
-{% if stock %}<form class="row" method="post" action="/batch/{{ b.id }}/use">
-  <label>Use from inventory<select name="inventory_id">{% for i in stock %}<option value="{{ i.id }}">{{ i.name }} ({{ i.qty|round(2) }} {{ i.unit or "" }} on hand{% if i.unit_cost %}, ${{ "%.2f"|format(i.unit_cost) }}/{{ i.unit or "unit" }}{% endif %})</option>{% endfor %}</select></label>
-  <label>Qty<input name="qty" type="number" step="any" min="0" required></label>
-  <label>Unit<select name="unit"><option value="">same as stock</option>{% for u in units %}<option>{{ u }}</option>{% endfor %}</select></label>
-  <label>Date<input name="spent_on" type="date" value="{{ today }}"></label>
-  <button>Use</button>
-</form>{% endif %}
-<p class="muted" style="font-size:.85rem">"Use" takes it out of <a href="/inventory">inventory</a> and charges it to this batch at its average cost; Unit converts weights (g, oz, lb, kg) and volumes (ml, tsp, gal…), so weigh powders on the scale. Removing that line puts it back. Equipment isn't listed: it's kept, not used up.</p>
+<section id="ingredients">
+  <h2>Ingredients</h2>
+  <div class="scroll"><table>
+    <tr><th>Kind</th><th>Name</th><th class="r">Amount</th><th class="r">PPG</th><th>Added</th><th></th></tr>
+    {% for i in s.ings %}<tr>
+      <td class="soft">{{ i.kind }}</td><td>{{ i.name or "" }}</td><td class="num r">{{ i.amount|round(3) }} {{ i.unit }}</td>
+      <td class="num r">{{ i.ppg or "" }}</td><td class="muted">{{ i.added_on or "" }}</td>
+      <td><form class="inline" method="post" action="/batch/{{ b.id }}/ingredient/{{ i.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
+    </tr>{% else %}<tr><td colspan="6" class="muted">No ingredients yet.</td></tr>{% endfor %}
+  </table></div>
+  <form class="row" method="post" action="/batch/{{ b.id }}/ingredient">
+    <label>Kind<select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
+    <label>Name<input name="name" placeholder="orange blossom"></label>
+    <label>Amount<input name="amount" type="number" step="any" required></label>
+    <label>Unit<select name="unit">{% for u in units %}<option>{{ u }}</option>{% endfor %}</select></label>
+    <label>PPG<input name="ppg" type="number" step="any" placeholder="honey: 35"></label>
+    <label>Added<input name="added_on" type="date"></label>
+    <button>Add</button>
+  </form>
+  <p class="muted small" style="margin-bottom:0">PPG = gravity points per lb per gallon (honey defaults to 35; fruit ~4–8), or for liquids, points per gallon of that liquid (apple juice ~50). Items without a PPG don't count toward est. OG.</p>
 </section>
 
 {% if s.tosna %}
-<section>
-<h2 style="margin-top:0">Nutrients (TOSNA, Fermaid-O)</h2>
-<p class="muted">Target YAN {{ s.tosna.yan_ppm }} ppm · total {{ s.tosna.total_g }} g · {{ s.nutrient_done }} of 4 logged{% if s.tosna.capped %} · capped at the 2.5 g/L Fermaid-O max{% endif %} · <a href="https://wiki.meadtools.com/en/process/nutrient_schedules" target="_blank" rel="noopener">about TOSNA</a></p>
-<ol>{% for d in s.tosna.doses %}
-  <li {% if loop.index0 < s.nutrient_done %}style="text-decoration:line-through" class="muted"{% endif %}>{{ d.g }} g {{ d.when }}</li>
-{% endfor %}</ol>
-<p class="muted" style="font-size:.85rem">Log each addition as a "nutrient" event below to tick it off.</p>
+<section id="nutrients">
+  <h2>Nutrients (TOSNA, Fermaid-O)</h2>
+  <p class="muted">Target YAN {{ s.tosna.yan_ppm }} ppm · total {{ s.tosna.total_g }} g · {{ s.nutrient_done }} of 4 logged{% if s.tosna.capped %} · capped at the 2.5 g/L Fermaid-O max{% endif %} · <a href="https://wiki.meadtools.com/en/process/nutrient_schedules" target="_blank" rel="noopener">about TOSNA</a></p>
+  <ol>{% for d in s.tosna.doses %}
+    <li {% if loop.index0 < s.nutrient_done %}style="text-decoration:line-through" class="muted"{% endif %}>{{ d.g }} g {{ d.when }}</li>
+  {% endfor %}</ol>
+  <p class="muted small" style="margin-bottom:0">Log each addition as a "nutrient" event below to tick it off.</p>
 </section>
 {% endif %}
 
-<section>
-<h2 style="margin-top:0">Log</h2>
-<div class="scroll"><table>
-  <tr><th>Date</th><th>Event</th><th>Note</th><th>Rating</th><th></th></tr>
-  {% for e in events %}<tr>
-    <td>{{ e.on_date }}</td><td>{{ e.kind }}</td><td class="wrap">{{ e.note or "" }}</td><td>{{ "★" * e.rating if e.rating else "" }}</td>
-    <td><form class="inline" method="post" action="/batch/{{ b.id }}/event/{{ e.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
-  </tr>{% endfor %}
-</table></div>
-<form class="row" method="post" action="/batch/{{ b.id }}/event">
-  <label>Date<input name="on_date" type="date" value="{{ today }}"></label>
-  <label>Event<select name="kind">{% for k in event_kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
-  <label>Note<input name="note" size="30"></label>
-  <label>Rating<select name="rating"><option value=""></option>{% for n in range(1,6) %}<option>{{ n }}</option>{% endfor %}</select></label>
-  <button>Log</button>
-</form>
+<section id="log">
+  <h2>Log</h2>
+  <div class="scroll"><table>
+    <tr><th>Date</th><th>Event</th><th>Note</th><th>Rating</th><th></th></tr>
+    {% for e in events %}<tr>
+      <td class="soft">{{ e.on_date }}</td><td>{{ e.kind }}</td><td class="wrap muted">{{ e.note or "" }}</td><td>{{ "★" * e.rating if e.rating else "" }}</td>
+      <td><form class="inline" method="post" action="/batch/{{ b.id }}/event/{{ e.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
+    </tr>{% else %}<tr><td colspan="5" class="muted">Nothing logged yet.</td></tr>{% endfor %}
+  </table></div>
+  <form class="row" method="post" action="/batch/{{ b.id }}/event">
+    <label>Date<input name="on_date" type="date" value="{{ today }}"></label>
+    <label>Event<select name="kind">{% for k in event_kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
+    <label>Note<input name="note" size="30"></label>
+    <label>Rating<select name="rating"><option value=""></option>{% for n in range(1,6) %}<option>{{ n }}</option>{% endfor %}</select></label>
+    <button>Log</button>
+  </form>
 </section>
 
-<p>
-  {% if b.status != "recipe" %}<form class="inline" method="post" action="/batch/{{ b.id }}/clone"><button>Clone as new batch</button></form>
-  <form class="inline" method="post" action="/batch/{{ b.id }}/save-recipe"><button>Save as recipe</button></form>{% endif %}
-  <form class="inline" method="post" action="/batch/{{ b.id }}/delete" onsubmit="return confirm('Delete {{ b.name|e }} and all its readings?')"><button class="danger">Delete batch</button></form>
-  {% set ph = (s.reads|selectattr("ph")|map(attribute="ph")|list|last) if s.reads|selectattr("ph")|list else "" %}
-  <a href="/calc{% if s.cur and b.volume_gal %}?b_cur={{ '%.3f'|format(s.cur) }}&b_vol={{ b.volume_gal }}&s_vol={{ b.volume_gal }}&ph={{ ph }}&abv={{ '%.1f'|format(s.abv) }}{% endif %}">Stabilize / backsweeten →</a>
-</p>
+<details id="details" class="card">
+  <summary style="font-size:1.1rem;font-weight:700;color:var(--fg)">Details</summary>
+  <form method="post" action="/batch/{{ b.id }}" style="margin-top:.9rem">
+    <div class="grid2">
+      <label>Name<input name="name" value="{{ b.name }}" required></label>
+      <label>Status<select name="status">{% for st in statuses %}<option {{ "selected" if st == b.status }}>{{ st }}</option>{% endfor %}</select></label>
+      <label>Style<input name="style" value="{{ b.style or '' }}" placeholder="traditional, melomel…" list="styles"></label>
+      <label>Volume (gal)<input name="volume_gal" type="number" step="0.01" value="{{ b.volume_gal or '' }}"></label>
+      <label>Yeast<input name="yeast" value="{{ b.yeast or '' }}" placeholder="71B, D47, EC-1118…"></label>
+      <label>Yeast N need<select name="n_need">{% for n in n_needs %}<option {{ "selected" if n == b.n_need }}>{{ n }}</option>{% endfor %}</select></label>
+      <label>Nutrients<select name="nutrient_protocol">{% for k, v in protocols.items() %}<option value="{{ k }}" {{ "selected" if k == b.nutrient_protocol }}>{{ v }}</option>{% endfor %}</select></label>
+      <label style="flex-direction:row;gap:.4rem;align-items:center">Rehydrated with GoFerm<input type="checkbox" name="goferm" {{ "checked" if b.goferm }}></label>
+      <label>Start / pitch<input name="start_date" type="date" value="{{ b.start_date or '' }}"></label>
+      <label>Bottled<input name="bottle_date" type="date" value="{{ b.bottle_date or '' }}"></label>
+      <label>Bottles filled<input name="bottles" type="number" step="1" min="0" value="{{ b.bottles or '' }}"></label>
+      <label>Target OG<input name="target_og" type="number" step="0.001" value="{{ b.target_og or '' }}"></label>
+      <label>Target FG (min)<input name="target_fg" type="number" step="0.001" value="{{ b.target_fg or '' }}"></label>
+      <label>Target FG (max)<input name="target_fg_max" type="number" step="0.001" value="{{ b.target_fg_max or '' }}"></label>
+      <label>Source URL<input name="source_url" type="url" value="{{ b.source_url or '' }}"></label>
+    </div>
+    <label style="margin-top:.75rem">Notes<textarea name="notes" rows="3">{{ b.notes or '' }}</textarea></label>
+    <datalist id="styles">{% for x in ["traditional","melomel","cyser","pyment","metheglin","braggot","bochet","acerglyn","session"] %}<option>{{ x }}</option>{% endfor %}</datalist>
+    <p style="margin-bottom:0"><button>Save details</button></p>
+  </form>
+</details>
 
 {% if s.reads|length > 1 %}
 <script>
-  const css = getComputedStyle(document.documentElement);
+  const css = getComputedStyle(document.documentElement), v = n => css.getPropertyValue(n).trim();
   new Chart(document.getElementById("chart"), {
     type: "line",
     data: {
       labels: {{ s.reads | map(attribute="taken_on") | list | tojson }},
       datasets: [{ label: "SG (corrected)", data: {{ s.reads | map(attribute="sg_c") | list | tojson }},
-                   borderColor: css.getPropertyValue("--accent"), tension: .2 }]
+                   borderColor: v("--accent-fill"), backgroundColor: v("--accent-fill"), borderWidth: 2.5, tension: .2, pointRadius: 4 }]
     },
     options: { plugins: { legend: { display: false } },
-               scales: { y: { ticks: { callback: v => v.toFixed(3) } } } }
+               scales: { y: { ticks: { color: v("--muted"), callback: x => x.toFixed(3) }, grid: { color: v("--line") } },
+                         x: { ticks: { color: v("--muted") }, grid: { display: false } } } }
   });
 </script>
 {% endif %}

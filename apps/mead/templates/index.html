@@ -1,50 +1,130 @@
 {% extends "base.html" %}
+{% block head %}
+<style>
+  .head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; margin-bottom: 1rem; }
+  .cols { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; margin-top: 1rem; }
+  .cols > .main { flex: 999 1 600px; min-width: 0; }
+  .cols > aside { flex: 1 1 280px; min-width: 0; }
+  .bcard { display: grid; grid-template-columns: minmax(0, 1.5fr) 170px minmax(0, 1fr); gap: 1.25rem; align-items: center; }
+  .bcard .name { color: var(--fg); font-weight: 600; font-size: 1.05rem; text-decoration: none; }
+  .bcard .nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; text-align: right; }
+  .bcard .nums small { display: block; color: var(--muted); font-size: .75rem; }
+  .bcard .nums b { font-weight: 600; }
+  .bcard .next-line { grid-column: 1 / -1; padding-top: .7rem; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; justify-content: space-between; }
+  .side h2 { margin: 0 0 .6rem; font-size: 1rem; }
+  .line { display: flex; justify-content: space-between; gap: .75rem; padding: .3rem 0; }
+  @media (max-width: 720px) {
+    .bcard { grid-template-columns: 1fr; gap: .6rem; }
+    .bcard .nums { text-align: left; }
+  }
+</style>
+{% endblock %}
 {% block body %}
+{% set state_pill = {"Fermenting": "accent", "Just pitched": "accent", "Possibly stuck": "warn",
+                     "Stable": "info", "Stabilized": "info", "Aging": "info"} %}
+<div class="head">
+  <h1>Up next</h1>
+  <span class="muted">{{ today.strftime("%A, %b ") ~ today.day }}</span>
+</div>
+
 {% if upnext %}
-<h2 style="margin-top:.5rem">Up next</h2>
 <div class="upnext">
   {% for b, s in upnext %}{% set due = s.due is not none and s.due <= today %}
   <section class="task{{ ' due' if due }}">
     <span class="when">{{ s.due_label }}</span>
     <b>{% if s.next_link %}<a href="{{ s.next_link }}" target="_blank" rel="noopener">{{ s.next }}</a>{% else %}{{ s.next }}{% endif %}</b>
-    <span class="muted"><a href="/batch/{{ b.id }}">{{ b.name }}</a> · {{ s.state }}</span>
-    <div class="row" style="display:flex;gap:.5rem;align-items:center;margin-top:.25rem">
+    <span class="soft"><a href="/batch/{{ b.id }}">{{ b.name }}</a> · {{ s.state }}</span>
+    <div style="display:flex;gap:.5rem;align-items:center;margin-top:auto;padding-top:.25rem">
       {% if s.done_kind %}<form class="inline" method="post" action="/batch/{{ b.id }}/event">
         <input type="hidden" name="kind" value="{{ s.done_kind }}"><input type="hidden" name="back" value="/">
         <button>Mark done</button></form>
-      {% elif not s.next_link %}<a href="/batch/{{ b.id }}#log-reading">Log a reading</a>{% endif %}
+      {% elif not s.next_link %}<a class="btn ghost" href="/log?batch={{ b.id }}">Log a reading</a>{% endif %}
     </div>
   </section>
   {% endfor %}
 </div>
+{% else %}
+<p class="muted">Nothing to do right now. {% if not active %}Start a batch below, or pick a <a href="/recipes">recipe</a>.{% endif %}</p>
 {% endif %}
 
-<form class="row" method="post" action="/batch">
-  <input name="name" placeholder="New batch name" required>
-  <button>Start planning</button>
-</form>
+<div class="cols">
+  <div class="main">
+    {% if active %}
+    <h2>Fermenting <span class="count">{{ active|length }}</span></h2>
+    {% for b, s in active %}
+    <section class="bcard">
+      <div style="display:flex;flex-direction:column;gap:.2rem;min-width:0">
+        <a class="name" href="/batch/{{ b.id }}">{{ b.name }}</a>
+        <span class="muted small">{{ b.volume_gal or "?" }} gal{% if b.style %} {{ b.style }}{% endif %}{% if b.yeast %} · {{ b.yeast }}{% endif %}{% if s.days is defined %} · day {{ s.days }}{% endif %}</span>
+        {% if s.state %}<span class="pill {{ state_pill.get(s.state, '') }}" style="align-self:flex-start;margin-top:.3rem">{{ b.status|capitalize }} · {{ s.state|lower }}</span>{% endif %}
+      </div>
+      {% if s.spark %}<svg aria-hidden="true" width="170" height="44" viewBox="0 0 170 44"><polyline points="{{ s.spark }}" fill="none" stroke="#e8a93a" stroke-width="2" stroke-linejoin="round"/></svg>
+      {% else %}<span class="muted small">Graph after two readings</span>{% endif %}
+      <div class="nums">
+        <div><small>Gravity</small><b>{{ "%.3f"|format(s.cur or s.og) if (s.cur or s.og) else "—" }}</b></div>
+        <div><small>ABV</small><b>{{ "%.1f%%"|format(s.abv) if s.abv is defined else "—" }}</b></div>
+        <div><small>Cost</small><b>{{ "$%.2f"|format(s.cost) if s.cost else "—" }}</b></div>
+      </div>
+    </section>
+    {% endfor %}
+    {% endif %}
 
-{% for st, rows in groups.items() %}{% if rows %}
-<h2>{{ st }} <span class="muted">({{ rows|length }})</span></h2>
-<section class="scroll">
-<table>
-  <tr><th>Batch</th><th>Style</th><th>Vol</th><th>OG</th><th>Current</th><th>ABV</th><th>Day</th><th>Cost</th><th>Status</th><th>Next</th></tr>
-  {% for b, s in rows %}
-  <tr>
-    <td><a href="/batch/{{ b.id }}">{{ b.name }}</a></td>
-    <td>{{ b.style or "" }}</td>
-    <td class="num">{{ b.volume_gal or "" }}{% if b.volume_gal %} gal{% endif %}</td>
-    <td class="num">{{ "%.3f"|format(s.og) if s.og else "" }}</td>
-    <td class="num">{{ "%.3f"|format(s.cur) if s.cur else "" }}</td>
-    <td class="num">{{ "%.1f%%"|format(s.abv) if s.abv is defined else "" }}</td>
-    <td class="num">{{ s.days if s.days is defined else "" }}</td>
-    <td class="num">{{ "$%.2f"|format(s.cost) if s.cost else "" }}</td>
-    <td>{{ s.state or "" }}</td>
-    <td class="wrap next">{% if s.next_link %}<a href="{{ s.next_link }}" target="_blank" rel="noopener">{{ s.next }}</a>{% else %}{{ s.next or "" }}{% endif %}</td>
-  </tr>
-  {% endfor %}
-</table>
-</section>
-{% endif %}{% endfor %}
-{% if not groups.values()|sum(start=[]) %}<p class="muted">No batches yet — name one above, or start from a <a href="/recipes">recipe</a>.</p>{% endif %}
+    {% if planned %}
+    <h2>Planned <span class="count">{{ planned|length }}</span></h2>
+    <section class="scroll" style="padding:0">
+      <table>
+        <tr><th style="padding-left:1.25rem">Batch</th><th>Size</th><th class="r">Est. OG</th><th class="r" style="padding-right:1.25rem">Cost so far</th></tr>
+        {% for b, s in planned %}<tr>
+          <td style="padding-left:1.25rem"><a href="/batch/{{ b.id }}">{{ b.name }}</a></td>
+          <td class="soft">{{ b.volume_gal or "" }}{% if b.volume_gal %} gal{% endif %}</td>
+          <td class="r">{{ "%.3f"|format(s.og) if s.og else "" }}</td>
+          <td class="r" style="padding-right:1.25rem">{{ "$%.2f"|format(s.cost) if s.cost else "" }}</td>
+        </tr>{% endfor %}
+      </table>
+    </section>
+    {% endif %}
+
+    {% if cellar %}
+    <h2>In the cellar <span class="count">{{ cellar|length }}</span></h2>
+    <section class="scroll" style="padding:0">
+      <table>
+        <tr><th style="padding-left:1.25rem">Batch</th><th>Bottled</th><th class="r">ABV</th><th class="r">Bottles</th><th class="r" style="padding-right:1.25rem">Per bottle</th></tr>
+        {% for b, s in cellar %}<tr{% if b.status == "archived" %} class="muted"{% endif %}>
+          <td style="padding-left:1.25rem"><a href="/batch/{{ b.id }}"{% if b.status == "archived" %} style="color:var(--muted)"{% endif %}>{{ b.name }}</a></td>
+          <td class="soft">{% if b.status == "archived" %}Archived{% elif b.bottle_date %}{{ b.bottle_date }}{% endif %}</td>
+          <td class="r">{{ "%.1f%%"|format(s.abv) if s.abv is defined else "—" }}</td>
+          <td class="r">{{ b.bottles or "—" }}</td>
+          <td class="r" style="padding-right:1.25rem">{% if b.status == "archived" %}—{% elif s.per_bottle is defined %}{{ "$%.2f"|format(s.per_bottle) }}{% elif s.cost_bottle is defined %}~{{ "$%.2f"|format(s.cost_bottle) }}{% else %}—{% endif %}</td>
+        </tr>{% endfor %}
+      </table>
+    </section>
+    {% endif %}
+
+    <h2 id="new">Start a batch</h2>
+    <form class="row" method="post" action="/batch" style="margin-top:0">
+      <label>Name<input name="name" placeholder="e.g. Spring melomel" required></label>
+      <button>Start planning</button>
+      <a href="/recipes" style="align-self:center">or start from a recipe</a>
+    </form>
+  </div>
+
+  <aside class="side">
+    <section>
+      <h2>Shelf check</h2>
+      {% for name in shelf.out %}<div class="line attn" style="border:1px solid var(--warn-line);border-radius:10px;padding:.45rem .7rem;margin-bottom:.4rem"><span>{{ name }}</span><span class="hl" style="font-weight:600">Out</span></div>{% endfor %}
+      {% if shelf.unpriced %}<div class="line"><span class="soft">Items with no price</span><a href="/inventory?edit=1">{{ shelf.unpriced }}</a></div>{% endif %}
+      {% if active %}<div class="line"><span class="soft">Bottles on hand / needed soon</span><b>{{ "%g"|format(shelf.bottles) }} / ~{{ shelf.need }}</b></div>{% endif %}
+      <a href="/inventory">Open inventory</a>
+    </section>
+    {% if settle or spent %}
+    <section>
+      <h2>Who paid</h2>
+      {% if settle %}<div style="font-size:1.25rem;font-weight:700">{{ settle.from }} owes {{ settle.to }} <span style="color:var(--accent)">{{ "$%.2f"|format(settle.amount) }}</span></div>
+      {% else %}<div style="font-size:1.1rem;font-weight:600">All square</div>{% endif %}
+      <div class="muted small" style="margin:.2rem 0 .7rem">{{ spent|money }} spent together</div>
+      <a class="btn ghost" href="/money">Open Who paid</a>
+    </section>
+    {% endif %}
+  </aside>
+</div>
 {% endblock %}

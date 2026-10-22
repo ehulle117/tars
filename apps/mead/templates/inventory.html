@@ -1,7 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Inventory · Mead Log{% endblock %}
+{% block head %}
+<style>
+  .inv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: .9rem; }
+  .inv-card { display: flex; flex-direction: column; gap: .3rem; margin: 0; }
+  .inv-card .clip { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .inv-group h2 { margin-top: 1.5rem; }
+</style>
+{% endblock %}
 {% block body %}
-<h1 style="margin:.25rem 0">Inventory</h1>
+<h1 style="margin-bottom:.75rem">Inventory</h1>
 {% if editing %}
 <form method="post" action="/inventory/save">
 <div class="row" style="justify-content:space-between;align-items:center;margin:0 0 .75rem;display:flex">
@@ -24,48 +32,97 @@
 </section>
 </form>
 {% else %}
-<form class="row" method="get" action="/inventory" style="justify-content:space-between;align-items:center;margin:0 0 .75rem">
-  <span class="muted">Supplies on hand <b class="num">{{ "$%.2f"|format(value) }}</b> · equipment <b class="num">{{ "$%.2f"|format(equipment_value) }}</b></span>
-  {% if items %}<input type="hidden" name="edit" value="1"><button>Edit</button>{% endif %}
-</form>
+<div style="display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;justify-content:space-between;margin:-.4rem 0 1rem">
+  <span class="muted">Supplies on hand <b class="num" style="color:var(--fg)">{{ value|money }}</b> · equipment <b class="num" style="color:var(--fg)">{{ equipment_value|money }}</b></span>
+  <span style="display:flex;gap:.5rem">{% if items %}<a class="btn ghost" href="/inventory?edit=1">Edit</a>{% endif %}<a class="btn" href="#add">Add item</a></span>
+</div>
 
-<section class="scroll">
-<table>
-  <tr><th>Kind</th><th>Item</th><th>On hand</th><th>Unit cost</th><th>Value</th><th>Restock (+) or correct (−)</th></tr>
-  {% for i in supplies %}<tr {% if i.qty <= 0 %}class="muted"{% endif %}>
-    <td>{{ i.kind or "" }}</td>
-    <td class="wrap">{{ i.name }}{% if i.notes %}<br><small class="muted">{{ i.notes }}</small>{% endif %}</td>
-    <td class="num">{{ i.qty|round(2) }} {{ i.unit or "" }}</td>
-    <td class="num">{{ "$%.2f"|format(i.unit_cost) if i.unit_cost is not none else "" }}</td>
-    <td class="num">{{ "$%.2f"|format(i.qty * i.unit_cost) if i.unit_cost is not none else "" }}</td>
-    <td><form class="inline" method="post" action="/inventory/{{ i.id }}">
-      <input name="delta" type="number" step="any" placeholder="±qty" required>
-      <input name="paid" type="number" step="0.01" min="0" placeholder="paid $">
-      <input name="paid_by" list="payers" placeholder="paid by" size="7">
-      <button>Update</button></form></td>
-  </tr>{% else %}<tr><td colspan="6" class="muted">No supplies tracked yet — add what's on your shelf below.</td></tr>{% endfor %}
-</table>
+{% set out = supplies|selectattr("qty", "le", 0.005)|list %}
+{% set unpriced = supplies|rejectattr("qty", "le", 0.005)|selectattr("unit_cost", "none")|list + supplies|rejectattr("qty", "le", 0.005)|selectattr("unit_cost", "eq", 0)|list %}
+{% if out or unpriced %}
+<section class="attn" style="display:flex;flex-wrap:wrap;gap:.5rem 1.75rem;align-items:center">
+  <h2 style="margin:0;font-size:1rem">Needs attention</h2>
+  {% if out %}<span><b>{{ out|map(attribute="name")|join(", ") }}</b> {{ "is" if out|length == 1 else "are" }} out</span>{% endif %}
+  {% if unpriced %}<span><b>{{ unpriced|length }} item{{ "s" if unpriced|length != 1 }}</b> {{ "has" if unpriced|length == 1 else "have" }} no price: {{ unpriced|map(attribute="name")|join(", ") }}</span>{% endif %}
 </section>
+{% endif %}
+
+<div style="display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin-bottom:.5rem">
+  <label style="flex:1 1 220px"><span class="muted" style="position:absolute;left:-9999px">Search supplies</span><input id="inv-search" type="search" placeholder="Search supplies…" style="width:100%"></label>
+  <div id="inv-kinds" style="display:flex;gap:.35rem;flex-wrap:wrap">
+    <button type="button" class="pill accent" data-kind="">All</button>
+    {% for k in supplies|map(attribute="kind")|unique %}<button type="button" class="pill" data-kind="{{ k }}">{{ k|capitalize }}</button>{% endfor %}
+    {% if equipment %}<a class="pill" href="#equipment" style="text-decoration:none">Equipment ↓</a>{% endif %}
+  </div>
+</div>
+
+{% for kind, group in supplies|groupby("kind") %}
+<div class="inv-group" data-kind="{{ kind }}">
+<h2>{{ (kind or "other")|capitalize }} <span class="count">{{ group|length }}</span></h2>
+<div class="inv-grid">
+  {% for i in group %}{% set gone = i.qty <= 0.005 %}
+  <section class="inv-card{{ ' attn' if gone }}" data-name="{{ (i.name ~ ' ' ~ (i.notes or ''))|lower }}">
+    <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:flex-start">
+      <b style="font-weight:600">{{ i.name }}</b>{% if gone %}<span class="pill warn">Out</span>{% endif %}
+    </div>
+    {% if i.notes %}<span class="muted small clip" title="{{ i.notes }}">{{ i.notes }}</span>{% endif %}
+    <div style="font-size:1.6rem;font-weight:700;{{ 'color:var(--muted)' if gone }}">{{ "%g"|format(i.qty|round(2)) }} <span style="font-size:1rem;font-weight:500">{{ i.unit or "" }}</span></div>
+    <div class="muted small">{% if i.unit_cost %}{{ "$%.2f"|format(i.unit_cost) }}/{{ i.unit or "each" }}{% if not gone %} · {{ "$%.2f"|format(i.qty * i.unit_cost) }}{% endif %}{% else %}<span class="hl" style="color:var(--warn)">No price yet: batches get charged $0</span>{% endif %}</div>
+    <details style="margin-top:auto">
+      <summary class="small">{{ "Restock" if gone else "Restock or correct" }}</summary>
+      <form method="post" action="/inventory/{{ i.id }}" style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem">
+        <input name="delta" type="number" step="any" placeholder="±qty" required aria-label="Quantity to add (negative to take out)" style="width:5.5rem">
+        <input name="paid" type="number" step="0.01" min="0" placeholder="paid $" aria-label="Paid" style="width:5.5rem">
+        <input name="paid_by" list="payers" placeholder="paid by" size="7" aria-label="Paid by">
+        <button>Update</button>
+      </form>
+    </details>
+  </section>
+  {% endfor %}
+</div>
+</div>
+{% else %}<p class="muted">No supplies tracked yet — add what's on your shelf below.</p>{% endfor %}
 
 {% if equipment %}
-<h2>Equipment <span class="muted">({{ "$%.2f"|format(equipment_value) }})</span></h2>
-<section class="scroll">
+<h2 id="equipment">Equipment <span class="count">{{ "$%.2f"|format(equipment_value) }}</span></h2>
+<section class="scroll" style="padding:0">
 <table>
-  <tr><th>Item</th><th>Count</th><th>Cost each</th><th>Total</th></tr>
+  <tr><th style="padding-left:1.25rem">Item</th><th class="r">Count</th><th class="r">Cost each</th><th class="r" style="padding-right:1.25rem">Total</th></tr>
   {% for i in equipment %}<tr>
-    <td class="wrap">{{ i.name }}{% if i.notes %}<br><small class="muted">{{ i.notes }}</small>{% endif %}</td>
-    <td class="num">{{ "%g"|format(i.qty) }}</td>
-    <td class="num">{{ "$%.2f"|format(i.unit_cost) if i.unit_cost is not none else "" }}</td>
-    <td class="num">{{ "$%.2f"|format(i.qty * i.unit_cost) if i.unit_cost is not none else "" }}</td>
+    <td class="wrap" style="padding-left:1.25rem">{{ i.name }}{% if i.notes %}<br><small class="muted">{{ i.notes }}</small>{% endif %}</td>
+    <td class="num r">{{ "%g"|format(i.qty) }}</td>
+    <td class="num r">{{ "$%.2f"|format(i.unit_cost) if i.unit_cost is not none else "" }}</td>
+    <td class="num r" style="padding-right:1.25rem">{{ "$%.2f"|format(i.qty * i.unit_cost) if i.unit_cost is not none else "" }}</td>
   </tr>{% endfor %}
 </table>
 </section>
 {% endif %}
+
+<script>
+  // search and kind chips narrow the supply cards; nothing is saved
+  const q = document.getElementById("inv-search"), chips = document.querySelectorAll("#inv-kinds button");
+  let kind = "";
+  function filter() {
+    const text = q.value.trim().toLowerCase();
+    document.querySelectorAll(".inv-group").forEach(g => {
+      let shown = 0;
+      g.querySelectorAll(".inv-card").forEach(c => {
+        const ok = (!kind || g.dataset.kind === kind) && (!text || c.dataset.name.includes(text));
+        c.hidden = !ok; shown += ok;
+      });
+      g.hidden = !shown;
+    });
+  }
+  q.addEventListener("input", filter);
+  chips.forEach(b => b.addEventListener("click", () => {
+    kind = b.dataset.kind; chips.forEach(x => x.classList.toggle("accent", x === b)); filter();
+  }));
+</script>
 {% endif %}
 
 {% if not editing %}
-<section>
-<h2 style="margin-top:0">Add item</h2>
+<section id="add" style="margin-top:1.5rem">
+<h2>Add item</h2>
 <form class="row" method="post" action="/inventory">
   <label>Kind<select name="kind" id="add-kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
   <label>Item<input name="name" placeholder="orange blossom honey" required></label>
