@@ -12,6 +12,26 @@
   .plane-icon { font-size: 18px; text-shadow: 0 0 3px #000; }
   .plane-label { font-size: 10px; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap; margin-top: -2px; }
   .leaflet-popup-content { font-size: 13px; line-height: 1.5; }
+  #bar .spacer { flex: 1; }
+  #bar button, #playbar button { background: #11141c; color: #cfd8e3; border: 1px solid #263044; border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 12px; }
+  #bar button.on { background: #1d2a44; border-color: #4a6fa5; }
+  #health { margin-left: 14px; font-size: 12px; color: #6fcf97; }
+  #health.bad { color: #ff6b6b; }
+  #warn {
+    position: absolute; top: 48px; left: 50%; transform: translateX(-50%); z-index: 1100;
+    max-width: 70%; background: rgba(120,20,20,0.95); color: #fff; font-size: 12px;
+    border-radius: 6px; padding: 6px 12px; line-height: 1.5;
+  }
+  #warn[hidden], #playbar[hidden] { display: none; }
+  #playbar {
+    position: absolute; left: 12px; right: 12px; bottom: 26px; z-index: 1000;
+    background: rgba(11,13,18,0.92); color: #cfd8e3; font-size: 12px; border-radius: 6px; padding: 8px 10px;
+  }
+  #playbar .pb-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #playbar .pb-row + .pb-row { margin-top: 6px; }
+  #playbar input, #playbar select { background: #11141c; color: #cfd8e3; border: 1px solid #263044; border-radius: 4px; padding: 2px 4px; font-size: 12px; }
+  #pb-slider { flex: 1; min-width: 120px; }
+  #pb-time { min-width: 170px; text-align: right; }
   #closest-panel {
     position: absolute; top: 52px; right: 12px; z-index: 1000;
     background: rgba(11,13,18,0.9); color: #cfd8e3; font-size: 12px;
@@ -23,8 +43,39 @@
 </style>
 </head>
 <body>
-  <div id="bar">Live Aircraft Map — <span id="count">0</span> aircraft tracked</div>
+  <div id="bar">
+    <span>Live Aircraft Map — <span id="count">0</span> aircraft tracked</span>
+    <span id="health"></span>
+    <span class="spacer"></span>
+    <button id="pb-toggle">Playback</button>
+  </div>
+  <div id="warn" hidden></div>
   <div id="map"></div>
+  <div id="playbar" hidden>
+    <div class="pb-row">
+      <label>Start <input type="datetime-local" id="pb-start"></label>
+      <label>Length
+        <select id="pb-len">
+          <option value="1800">30 min</option><option value="3600" selected>1 hour</option>
+          <option value="10800">3 hours</option><option value="21600">6 hours</option>
+          <option value="43200">12 hours</option><option value="86400">24 hours</option>
+        </select>
+      </label>
+      <button id="pb-load">Load</button>
+      <button id="pb-latest" title="Jump to the most recent logged data">Latest data</button>
+      <span id="pb-info"></span>
+    </div>
+    <div class="pb-row">
+      <button id="pb-play" disabled>&#9654;</button>
+      <select id="pb-speed" title="Playback speed">
+        <option value="1">1x</option><option value="10">10x</option><option value="30">30x</option>
+        <option value="60" selected>60x</option><option value="300">300x</option>
+      </select>
+      <input type="range" id="pb-slider" min="0" max="1" step="1" value="0" disabled>
+      <span id="pb-time">&mdash;</span>
+      <button id="pb-live">Back to live</button>
+    </div>
+  </div>
   <div id="closest-panel">
     <h3>Closest Approaches</h3>
     <ol id="closest-list"></ol>
@@ -131,8 +182,9 @@ async function poll() {
   try {
     const res = await fetch('/aircraft.json');
     const data = await res.json();
+    updateHealth(data);
     if (!map && data.receiver) initMap(data.receiver.lat, data.receiver.lon);
-    if (!map) { setTimeout(poll, 2000); return; }
+    if (!map || pb.active) { setTimeout(poll, 2000); return; }
 
     const seen = new Set();
     for (const a of data.aircraft) {
@@ -157,7 +209,7 @@ async function poll() {
       if (!seen.has(hex)) { map.removeLayer(markers[hex]); delete markers[hex]; }
     }
     document.getElementById('count').textContent = seen.size;
-  } catch (e) { /* keep trying */ }
+  } catch (e) { showWarn(['Cannot reach the map server.']); }
   setTimeout(poll, 2000);
 }
 
@@ -180,6 +232,216 @@ async function pollClosest() {
   } catch (e) { /* keep trying */ }
   setTimeout(pollClosest, 15000);
 }
+
+// ---- feed / alert health -------------------------------------------------
+function ago(sec) {
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 90) return `${sec}s`;
+  if (sec < 5400) return `${Math.round(sec / 60)}m`;
+  if (sec < 172800) return `${Math.round(sec / 3600)}h`;
+  return `${Math.round(sec / 86400)}d`;
+}
+
+function showWarn(problems) {
+  const el = document.getElementById('warn');
+  el.hidden = !problems.length;
+  el.replaceChildren(...problems.map(p => Object.assign(document.createElement('div'), { textContent: p })));
+}
+
+function updateHealth(data) {
+  const now = data.server_now, problems = [];
+  if (!data.updated_at) {
+    problems.push('The poller is not running (no state file).');
+  } else if (now - data.updated_at > 30) {
+    problems.push(`The poller has stopped: no update for ${ago(now - data.updated_at)}.`);
+  } else if (data.feed && !data.feed.ok) {
+    const since = data.feed.last_ok ? ` for ${ago(now - data.feed.last_ok)}` : '';
+    problems.push(`Aircraft feed is down${since}: ${data.feed.error || 'no data yet'}`);
+  }
+  const al = data.alerts;
+  if (al && al.last_error_at && al.last_error_at > (al.last_ok || 0)) {
+    problems.push(`Discord alerts are failing: ${al.last_error}`);
+  }
+  showWarn(problems);
+  const h = document.getElementById('health');
+  h.className = problems.length ? 'bad' : '';
+  h.textContent = problems.length ? '● needs attention' : '● feed OK';
+}
+
+// ---- track playback --------------------------------------------------------
+const GAP_S = 300;    // samples further apart than this are different flights
+const TRAIL_S = 900;  // trail length behind each aircraft, in recorded time
+const pb = { active: false, tracks: [], t0: 0, t1: 0, t: 0, playing: false, last: 0, layers: new Map(), startTouched: false };
+const $ = id => document.getElementById(id);
+
+function bearingDeg(a, b) {
+  const r = d => d * Math.PI / 180, dLon = r(b[2] - a[2]);
+  const y = Math.sin(dLon) * Math.cos(r(b[1]));
+  const x = Math.cos(r(a[1])) * Math.sin(r(b[1])) - Math.sin(r(a[1])) * Math.cos(r(b[1])) * Math.cos(dLon);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function splitSegments(pts) {
+  const segs = [];
+  let cur = [];
+  for (const p of pts) {
+    if (cur.length && p[0] - cur[cur.length - 1][0] > GAP_S) { segs.push(cur); cur = []; }
+    cur.push(p);
+  }
+  if (cur.length) segs.push(cur);
+  return segs;
+}
+
+function positionAt(seg, t) {
+  if (seg.length === 1) return { lat: seg[0][1], lon: seg[0][2], alt: seg[0][3], heading: 0 };
+  let lo = 0, hi = seg.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (seg[mid][0] <= t) lo = mid; else hi = mid; }
+  const a = seg[lo], b = seg[hi];
+  const f = b[0] === a[0] ? 0 : Math.min(1, Math.max(0, (t - a[0]) / (b[0] - a[0])));
+  const alt = a[3] != null && b[3] != null ? a[3] + (b[3] - a[3]) * f : (a[3] ?? b[3]);
+  return { lat: a[1] + (b[1] - a[1]) * f, lon: a[2] + (b[2] - a[2]) * f, alt, heading: bearingDeg(a, b) };
+}
+
+function activeSegment(tr, t) {
+  for (const seg of tr.segs) {
+    const first = seg[0][0], last = seg[seg.length - 1][0];
+    if (seg.length === 1 ? Math.abs(t - first) <= 30 : (t >= first && t <= last)) return seg;
+  }
+  return null;
+}
+
+function playbackPopup(tr, pos, t) {
+  return `<b>${tr.label}</b><br>Hex: ${tr.hex}<br>Altitude: ${pos.alt != null ? Math.round(pos.alt) + ' ft' : '—'}` +
+         `<br>Time: ${new Date(t * 1000).toLocaleString()}`;
+}
+
+function render() {
+  const t = pb.t, seen = new Set();
+  for (const tr of pb.tracks) {
+    const seg = activeSegment(tr, t);
+    if (!seg) continue;
+    const pos = positionAt(seg, t);
+    const trail = seg.filter(p => p[0] >= t - TRAIL_S && p[0] <= t).map(p => [p[1], p[2]]);
+    trail.push([pos.lat, pos.lon]);
+    seen.add(tr.hex);
+    let layer = pb.layers.get(tr.hex);
+    if (!layer) {
+      layer = {
+        marker: L.marker([pos.lat, pos.lon], { icon: planeIcon(pos.heading, tr.label) }).addTo(map),
+        line: L.polyline(trail, { color: '#4da3ff', weight: 2, opacity: 0.7, interactive: false }).addTo(map),
+        heading: pos.heading,
+      };
+      layer.marker.bindPopup(() => playbackPopup(tr, layer.pos, pb.t));
+      pb.layers.set(tr.hex, layer);
+    }
+    layer.pos = pos;
+    layer.marker.setLatLng([pos.lat, pos.lon]);
+    layer.line.setLatLngs(trail);
+    if (Math.abs(pos.heading - layer.heading) > 2) {
+      layer.heading = pos.heading;
+      const icon = layer.marker.getElement()?.querySelector('.plane-icon');
+      if (icon) icon.style.transform = `rotate(${pos.heading}deg)`;
+    }
+  }
+  for (const [hex, layer] of pb.layers) {
+    if (!seen.has(hex)) { map.removeLayer(layer.marker); map.removeLayer(layer.line); pb.layers.delete(hex); }
+  }
+  $('pb-slider').value = Math.round(t - pb.t0);
+  $('pb-time').textContent = `${new Date(t * 1000).toLocaleString()} · ${seen.size} aircraft`;
+}
+
+function clearPlaybackLayers() {
+  for (const layer of pb.layers.values()) { map.removeLayer(layer.marker); map.removeLayer(layer.line); }
+  pb.layers.clear();
+}
+
+function setPlaying(on) {
+  pb.playing = on;
+  $('pb-play').textContent = on ? '⏸' : '▶';
+  if (on) {
+    if (pb.t >= pb.t1) pb.t = pb.t0;
+    pb.last = performance.now();
+    requestAnimationFrame(tick);
+  }
+}
+
+function tick(now) {
+  if (!pb.playing) return;
+  pb.t = Math.min(pb.t1, pb.t + (now - pb.last) / 1000 * (+$('pb-speed').value));
+  pb.last = now;
+  render();
+  if (pb.t >= pb.t1) setPlaying(false); else requestAnimationFrame(tick);
+}
+
+function toLocalInput(sec) {  // unix seconds -> value for <input type="datetime-local">
+  const d = new Date(sec * 1000);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+function defaultStart() { $('pb-start').value = toLocalInput(Date.now() / 1000 - +$('pb-len').value); }
+
+async function loadHistory() {
+  const startMs = new Date($('pb-start').value).getTime();
+  if (isNaN(startMs)) { $('pb-info').textContent = 'Pick a start time.'; return; }
+  const from = startMs / 1000, to = from + +$('pb-len').value;
+  setPlaying(false);
+  $('pb-info').textContent = 'Loading…';
+  try {
+    const data = await (await fetch(`history.json?from=${from}&to=${to}`)).json();
+    clearPlaybackLayers();
+    pb.tracks = data.tracks.map(tr => ({ hex: tr.hex, label: (tr.flight || '').trim() || tr.hex, segs: splitSegments(tr.pts) }));
+    pb.t0 = from; pb.t1 = Math.min(to, data.to); pb.t = pb.t0;
+    const points = data.tracks.reduce((n, tr) => n + tr.pts.length, 0);
+    const slider = $('pb-slider');
+    slider.max = Math.max(1, Math.round(pb.t1 - pb.t0));
+    slider.value = 0;
+    slider.disabled = $('pb-play').disabled = !points;
+    if (points) {
+      $('pb-info').textContent = `${pb.tracks.length} aircraft, ${points} positions`;
+      render();
+    } else {
+      const [lo, hi] = data.bounds;
+      $('pb-info').textContent = lo
+        ? `No positions in this window. Logged data runs ${new Date(lo * 1000).toLocaleString()} to ${new Date(hi * 1000).toLocaleString()}.`
+        : 'No positions have been logged yet.';
+      $('pb-time').textContent = '—';
+    }
+  } catch (e) { $('pb-info').textContent = 'Could not load history.'; }
+}
+
+async function jumpToLatest() {
+  try {
+    const data = await (await fetch('history.json?from=0&to=0')).json();
+    if (!data.bounds[1]) { $('pb-info').textContent = 'No positions have been logged yet.'; return; }
+    $('pb-start').value = toLocalInput(data.bounds[1] - +$('pb-len').value);
+    pb.startTouched = true;
+    loadHistory();
+  } catch (e) { $('pb-info').textContent = 'Could not load history.'; }
+}
+
+function setPlaybackMode(on) {
+  if (on === pb.active) return;
+  pb.active = on;
+  $('pb-toggle').classList.toggle('on', on);
+  $('playbar').hidden = !on;
+  if (on) {
+    for (const m of Object.values(markers)) map.removeLayer(m);
+    markers = {};
+    if (!pb.startTouched) defaultStart();
+  } else {
+    setPlaying(false);
+    clearPlaybackLayers();
+  }
+}
+
+$('pb-toggle').onclick = () => { if (map) setPlaybackMode(!pb.active); };
+$('pb-live').onclick = () => setPlaybackMode(false);
+$('pb-load').onclick = loadHistory;
+$('pb-latest').onclick = jumpToLatest;
+$('pb-play').onclick = () => setPlaying(!pb.playing);
+$('pb-start').onchange = () => { pb.startTouched = true; };
+$('pb-len').onchange = () => { if (!pb.startTouched) defaultStart(); };
+$('pb-slider').oninput = e => { pb.t = pb.t0 + +e.target.value; render(); };
 
 poll();
 pollClosest();

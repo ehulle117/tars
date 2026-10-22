@@ -3,7 +3,9 @@
 import sqlite3
 from pathlib import Path
 
-DEFAULT_DB_PATH = Path(__file__).parent.parent / "adsb_tools.db"
+from adsb_tools import DATA_DIR
+
+DEFAULT_DB_PATH = DATA_DIR / "adsb_tools.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sightings (
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS positions (
     seen_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_positions_hex ON positions(hex);
+CREATE INDEX IF NOT EXISTS idx_positions_seen_at ON positions(seen_at);
 
 CREATE TABLE IF NOT EXISTS closest_approach (
     hex TEXT PRIMARY KEY,

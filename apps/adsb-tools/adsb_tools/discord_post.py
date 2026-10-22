@@ -9,9 +9,13 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 TOKEN_FILE = Path.home() / ".config" / "adsb-tools" / "discord_bot_token"
+
+# Surfaced in state.json so the map can warn when alerts are failing.
+STATUS: dict = {"last_ok": None, "last_error": None, "last_error_at": None}
 
 
 def post(channel_id: str, content: str, image_path: str | None = None) -> None:
@@ -28,7 +32,15 @@ def post(channel_id: str, content: str, image_path: str | None = None) -> None:
     else:
         args += ["-H", "Content-Type: application/json", "-d", json.dumps({"content": content})]
     args.append(f"https://discord.com/api/v10/channels/{channel_id}/messages")
-    subprocess.run(args, check=True)
+    try:
+        subprocess.run(args, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        # Raise a fresh error: str(e) would include the full command line, token and all.
+        lines = (e.stderr or "").strip().splitlines()
+        msg = lines[-1] if lines else f"curl exit {e.returncode}"
+        STATUS["last_error"], STATUS["last_error_at"] = msg, time.time()
+        raise RuntimeError(f"discord post failed: {msg}") from None
+    STATUS["last_ok"] = time.time()
 
 
 if __name__ == "__main__":

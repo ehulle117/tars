@@ -36,6 +36,10 @@ const panes = document.getElementById('panes');
 const empty = document.getElementById('empty');
 
 let ratio = 50;  // % of the width given to the first window when both are open
+try {
+  const saved = parseFloat(localStorage.getItem('adsbHubRatio'));
+  if (saved >= 15 && saved <= 85) ratio = saved;
+} catch (e) {}
 const divider = document.createElement('div');
 divider.className = 'divider';
 divider.title = 'Drag to resize';
@@ -79,7 +83,10 @@ divider.onpointermove = e => {
   ratio = Math.min(85, Math.max(15, (e.clientX - r.left) / r.width * 100));
   applyRatio();
 };
-divider.onpointerup = () => document.body.classList.remove('dragging');
+divider.onpointerup = () => {
+  document.body.classList.remove('dragging');
+  try { localStorage.setItem('adsbHubRatio', ratio); } catch (e) {}
+};
 refresh();
 
 // Keep the two Leaflet maps at the same center and zoom. Same-origin iframes,

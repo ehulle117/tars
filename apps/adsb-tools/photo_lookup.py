@@ -11,7 +11,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-CACHE_PATH = Path(__file__).parent / "photo_cache.json"
+from adsb_tools import DATA_DIR
+
+CACHE_PATH = DATA_DIR / "photo_cache.json"
 USER_AGENT = "adsb-tools/1.0 (hobby ADS-B tracker; https://github.com/ehulle117)"
 
 _cache: dict | None = None

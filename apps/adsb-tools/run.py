@@ -3,9 +3,11 @@
 coverage, and write a live state.json snapshot for map_server.py to serve.
 """
 import json
+import os
 import time
 from pathlib import Path
 
+from adsb_tools import DATA_DIR, discord_post
 from adsb_tools.poller import Poller
 from adsb_tools.db import get_db
 import logger
@@ -17,9 +19,10 @@ import coverage
 # dump1090-mutability writes JSON to /run/dump1090-mutability/, served here
 # by a plain stdlib http.server (lighttpd's own alias config wasn't
 # cooperating and 8080 collides with another service on this k3s node).
-AIRCRAFT_URL = "http://localhost:28080/aircraft.json"
+# In the cluster this is file:///dump1090/aircraft.json (hostPath mount); the HTTP bridge is the local-dev default.
+AIRCRAFT_URL = os.environ.get("AIRCRAFT_URL", "http://localhost:28080/aircraft.json")
 ALERT_CHANNEL_ID = "1550242832512458752"  # shared SDR-alerts Discord channel (Tars bot)
-STATE_PATH = Path(__file__).parent / "state.json"
+STATE_PATH = DATA_DIR / "state.json"
 
 # Receiver's exact coordinates are a real-world address - never committed.
 # Set once via: python3 -c "import json,pathlib; \
@@ -44,14 +47,18 @@ RECEIVER_LAT, RECEIVER_LON = _load_receiver_location()
 # ------------------------------------------------------------------------
 
 
-def make_state_writer():
+def make_state_writer(poller: Poller):
     def on_poll(aircraft: list[dict]) -> None:
         state = {
             "receiver": {"lat": RECEIVER_LAT, "lon": RECEIVER_LON},
             "aircraft": aircraft,
             "updated_at": time.time(),
+            "feed": poller.health(),
+            "alerts": discord_post.STATUS,
         }
-        STATE_PATH.write_text(json.dumps(state))
+        tmp = STATE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state))
+        os.replace(tmp, STATE_PATH)  # atomic: map_server never reads a half-written file
 
     return on_poll
 
@@ -59,7 +66,7 @@ def make_state_writer():
 def main() -> None:
     conn = get_db()
     poller = Poller(AIRCRAFT_URL, interval_s=2.0)
-    poller.register(make_state_writer())
+    poller.register(make_state_writer(poller))
     poller.register(logger.make_callback(conn))
     poller.register(closest_approach.make_callback(RECEIVER_LAT, RECEIVER_LON, conn))
     poller.register(coverage.make_callback(RECEIVER_LAT, RECEIVER_LON, conn))

@@ -2,11 +2,12 @@
 
 Six small features built on top of `dump1090`'s live aircraft feed, all
 sharing one poller and one SQLite database. Runs in the k3s cluster,
-pinned to `k3s-worker-pi` (see `../adsb-tools.yaml`) since it needs to
-reach the RTL-SDR JSON bridge on that node's `localhost:28080`.
+pinned to `k3s-worker-pi` (see `../adsb-tools.yaml`) since it reads the
+`aircraft.json` that `dump1090-mutability` writes on that node.
 
 - **Flight logger** (`logger.py`) — every aircraft seen, with session start/end and min/max altitude/speed, in `sightings`.
-- **Live map** (`map_server.py` + `static/map.html`) — Leaflet map of current aircraft positions.
+- **Live map** (`map_server.py` + `static/map.html`) — Leaflet map of current aircraft positions. A warning strip appears if the feed, the poller, or Discord posting stops working. The **Playback** button replays logged tracks (`/history.json`, ~1 position per aircraft per minute, interpolated).
+- **Hub** (`/hub` on the map server) — the live map and coverage map as two resizable, pan/zoom-synced windows.
 - **Overhead alert bot** (`alert_bot.py`) — Discord post on emergency squawks, military aircraft, helicopters, and low+close traffic.
 - **Coverage map** (`coverage_server.py` + `static/coverage.html`) — every position ever logged, colored by range and broken out as a directional polar plot, to visualize actual antenna reception range.
 - **Route lookup** (`route_lookup.py`) — aircraft type/registration/manufacturer via a local copy of the OpenSky Network aircraft database (`aircraftDatabase.csv`, baked into the image — hexdb.io was tried first but had ~0% coverage for US aircraft).
@@ -14,18 +15,27 @@ reach the RTL-SDR JSON bridge on that node's `localhost:28080`.
 
 ## What stays outside this repo
 
-`dump1090-mutability` (owns the RTL-SDR USB device) and its JSON bridge
-(`python3 -m http.server 28080 --directory /run/dump1090-mutability`) run
-as unmanaged host-level services directly on the Pi — not containerized,
-not part of this deploy. The poller pod reaches them via `hostNetwork: true`
-+ `http://localhost:28080/aircraft.json`.
+`dump1090-mutability` (owns the RTL-SDR USB device) runs as a systemd
+service directly on the Pi — not containerized, not part of this deploy.
+The poller pod mounts its `/run/dump1090-mutability` directory read-only
+(hostPath) and reads `aircraft.json` from it directly
+(`AIRCRAFT_URL=file:///dump1090/aircraft.json`). There is deliberately no
+HTTP bridge: the old hand-started one died on every reboot and the poller
+silently saw "no aircraft".
 
 ## Deployment
 
 See `../adsb-tools.yaml` — 3 Deployments (poller, live map on :8766,
-coverage map on :8767) sharing one PVC for `adsb_tools.db`/`state.json`/
-`photo_cache.json`. Push to `main`, CI builds+pushes the image, ArgoCD
-auto-syncs.
+coverage map on :8767) sharing one PVC mounted as a **directory** at `/data`
+(`ADSB_DATA_DIR`), holding `adsb_tools.db` (+ its WAL files), `state.json`,
+and `photo_cache.json`. Mount the directory, not individual files: SQLite's
+WAL files must be shared by every pod, or readers miss recent rows and the
+writer loses unflushed ones on restart.
+
+Push to `main`, CI builds+pushes the image, ArgoCD auto-syncs. The image tag
+is `:main` with `imagePullPolicy: Always`, so after CI finishes run
+`kubectl rollout restart deployment/<name> -n apps` to pick up new code.
+Do not let the manifest change land before the image that understands it.
 
 Secrets (created manually, never committed — see the migration plan for
 exact commands):

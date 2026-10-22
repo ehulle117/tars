@@ -7,15 +7,20 @@ sdr-waterfall/server.py (no Flask needed for two routes).
 
 Usage: python3 map_server.py <state.json> [port]
 """
+from __future__ import annotations
+
 import json
 import os
 import sys
+import time
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from route_lookup import lookup_route
 from photo_lookup import get_photo
+from adsb_tools.db import get_db
 from closest_approach import leaderboard
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -28,11 +33,41 @@ def coverage_url(path: str) -> str:
     return COVERAGE_UPSTREAM + path[len("/coverage"):]
 
 
+MAX_HISTORY_S = 48 * 3600   # cap one playback window
+MAX_HISTORY_ROWS = 150_000
+
+
+def build_history(start: float, end: float, db_path: Path | None = None) -> dict:
+    """Logged positions in [start, end] grouped per aircraft, for playback.
+    Positions are sampled ~1/min per aircraft, so the client interpolates."""
+    end = min(end, start + MAX_HISTORY_S)
+    conn = get_db(db_path) if db_path else get_db()
+    rows = conn.execute(
+        "SELECT hex, seen_at, lat, lon, alt_baro FROM positions "
+        "WHERE seen_at BETWEEN ? AND ? ORDER BY hex, seen_at LIMIT ?",
+        (start, end, MAX_HISTORY_ROWS),
+    ).fetchall()
+    # Later sessions overwrite earlier ones, so a hex that changed callsign gets its latest.
+    names = dict(conn.execute(
+        "SELECT hex, flight FROM sightings WHERE flight IS NOT NULL "
+        "AND last_seen >= ? AND first_seen <= ? ORDER BY first_seen", (start, end)).fetchall())
+    lo, hi = conn.execute("SELECT MIN(seen_at), MAX(seen_at) FROM positions").fetchone()
+    conn.close()
+    tracks: dict[str, list] = {}
+    for hex_, t, lat, lon, alt in rows:
+        tracks.setdefault(hex_, []).append([round(t, 1), lat, lon, alt])
+    return {
+        "from": start, "to": end, "bounds": [lo, hi],
+        "tracks": [{"hex": h, "flight": names.get(h), "pts": pts} for h, pts in tracks.items()],
+    }
+
+
 def build_response(state_path: str) -> dict:
     try:
         state = json.loads(Path(state_path).read_text())
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"receiver": None, "aircraft": []}
+        return {"receiver": None, "aircraft": [], "server_now": time.time()}
+    state["server_now"] = time.time()
     for a in state.get("aircraft", []):
         route = lookup_route(a["hex"])  # cached on disk, fails soft to None
         a["route"] = route
@@ -63,6 +98,21 @@ def make_handler(state_path: str):
             if self.path == "/aircraft.json":
                 payload = json.dumps(build_response(state_path)).encode()
                 self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            elif self.path.startswith("/history.json"):
+                q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                try:
+                    now = time.time()
+                    end = float(q.get("to", [now])[0])
+                    start = float(q.get("from", [end - 3600])[0])
+                    payload = json.dumps(build_history(start, end)).encode()
+                    status = 200
+                except ValueError:
+                    payload, status = b'{"error": "from/to must be unix timestamps"}', 400
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
@@ -133,8 +183,23 @@ def _self_check() -> None:
         assert result["aircraft"][0]["route"] == {"type": "TEST"}, result
         assert result["aircraft"][0]["photo"]["url"] == "http://example.com/test.jpg", result
         result_missing = build_response(path + ".missing")
-        assert result_missing == {"receiver": None, "aircraft": []}, result_missing
-        print("self-check OK: state file read, route + photo + closest-approach enrichment, and missing-file fallback all work")
+        assert result_missing["receiver"] is None and result_missing["aircraft"] == [], result_missing
+
+        dbp = Path(path + ".db")
+        conn = get_db(dbp)
+        conn.executemany("INSERT INTO positions (hex, lat, lon, alt_baro, range_km, seen_at) VALUES (?,?,?,?,?,?)",
+                         [("abc", 42.0, -76.0, 5000, 1.0, 100.0), ("abc", 42.1, -76.1, 5100, 1.0, 160.0),
+                          ("def", 43.0, -75.0, 9000, 1.0, 120.0), ("abc", 42.9, -76.9, 1, 1.0, 9999.0)])
+        conn.execute("INSERT INTO sightings (hex, flight, first_seen, last_seen) VALUES ('abc','TST1',90,170)")
+        conn.commit(); conn.close()
+        h = build_history(100.0, 200.0, dbp)
+        by = {t["hex"]: t for t in h["tracks"]}
+        assert [p[0] for p in by["abc"]["pts"]] == [100.0, 160.0] and by["abc"]["flight"] == "TST1", h
+        assert by["def"]["flight"] is None and h["bounds"] == [100.0, 9999.0], h
+        assert build_history(0.0, 10 * MAX_HISTORY_S, dbp)["to"] == MAX_HISTORY_S, "window must be capped"
+        for ext in ("", "-wal", "-shm"):
+            Path(str(dbp) + ext).unlink(missing_ok=True)
+        print("self-check OK: state read, enrichment, missing-file fallback, and history windowing/grouping/cap")
     finally:
         lookup_route, get_photo, leaderboard = orig_lookup, orig_photo, orig_leaderboard
         os.unlink(path)
