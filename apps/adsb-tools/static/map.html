@@ -81,7 +81,7 @@
   .pop-btns { margin-top: 8px; display: flex; gap: 6px; }
   .leaflet-popup-content a.btn { flex: 1; text-align: center; text-decoration: none; background: var(--line2); color: var(--text); border-radius: 6px; padding: 5px 0; font-size: 12px; }
   .leaflet-popup-content a.btn.primary { background: var(--violet); color: var(--bg); font-weight: 600; }
-  .pop-photo { width: 100%; border-radius: 6px; margin-bottom: 4px; display: block; }
+  .pop-photo { width: 100%; max-height: 120px; object-fit: cover; border-radius: 6px; margin-bottom: 4px; display: block; }
   .pop-credit { font-size: 10px; color: var(--dim); margin-bottom: 6px; }
 
   #side { grid-row: 3 / 5; grid-column: 2; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
@@ -410,11 +410,20 @@ function closestPopupContent(entry) {
       <a class="btn" href="/fleet?hex=${encodeURIComponent(entry.hex)}" target="_blank">History</a></div>`;
 }
 
+// Desktop popups open above the plane, so park it in the lower part of the map to leave them room.
+function viewFor(latlng, zoom) {
+  if (isPhone() || !map) return L.latLng(latlng);
+  const z = zoom ?? map.getZoom();
+  return map.unproject(map.project(latlng, z).subtract([0, map.getSize().y * 0.25]), z);
+}
+const popMaxH = () => (map ? Math.max(240, Math.round(map.getSize().y * 0.68)) : 420);
+
 function focusLive(hex) {
   const m = markers[hex];
   if (!m) return false;
   if (isPhone()) { selectCard(hex, true); map.flyTo(m.getLatLng(), Math.max(map.getZoom(), 10)); return true; }
-  map.flyTo(m.getLatLng(), Math.max(map.getZoom(), 10));
+  const z = Math.max(map.getZoom(), 10);
+  map.flyTo(viewFor(m.getLatLng(), z), z);
   m.openPopup();
   return true;
 }
@@ -537,15 +546,15 @@ async function poll() {
       } else {
         const hex = a.hex;
         markers[hex] = L.marker([a.lat, a.lon], { icon: planeIcon(a.track, label, a.alt_baro) }).addTo(map)
-          .on('click', () => { map.panTo(markers[hex].getLatLng()); if (isPhone()) selectCard(hex, true); });
+          .on('click', () => { map.panTo(viewFor(markers[hex].getLatLng())); if (isPhone()) selectCard(hex, true); });
       }
       if (isPhone()) markers[a.hex].unbindPopup();  // phone: the card strip replaces popups
-      else markers[a.hex].bindPopup(popupContent(a), { maxWidth: 280, autoPan: false });
+      else markers[a.hex].bindPopup(popupContent(a), { maxWidth: 280, maxHeight: popMaxH(), autoPan: false });
       updateLiveTrail(a, data.server_now);
 
       if (focusHex && !focusAt && !focusedLive && a.hex.toLowerCase() === focusHex.toLowerCase()) {
         focusedLive = true;
-        map.flyTo([a.lat, a.lon], 11);
+        map.flyTo(viewFor([a.lat, a.lon], 11), 11);
         if (isPhone()) selHex = a.hex; else markers[a.hex].openPopup();
       }
     }
@@ -576,7 +585,7 @@ async function pollClosest() {
       if (!row) return;
       const entry = data.leaderboard[+row.dataset.i];
       if (!map || entry.lat == null || entry.lon == null) return;
-      map.flyTo([entry.lat, entry.lon], 10);
+      map.flyTo(viewFor([entry.lat, entry.lon], 10), 10);
       L.popup({ maxWidth: 280 }).setLatLng([entry.lat, entry.lon]).setContent(closestPopupContent(entry)).openOn(map);
     };
   } catch (e) { /* keep trying */ }
@@ -745,8 +754,8 @@ function render() {
         line: L.polyline(trail, { color: altColor(pos.alt), weight: 2, opacity: 0.7, interactive: false }).addTo(map),
         heading: pos.heading,
       };
-      layer.marker.bindPopup(() => playbackPopup(tr, layer.pos, pb.t), { maxWidth: 280, autoPan: false });
-      layer.marker.on('click', () => { pb.follow = tr.hex; map.panTo(layer.marker.getLatLng()); });
+      layer.marker.bindPopup(() => playbackPopup(tr, layer.pos, pb.t), { maxWidth: 280, maxHeight: popMaxH(), autoPan: false });
+      layer.marker.on('click', () => { pb.follow = tr.hex; map.panTo(viewFor(layer.marker.getLatLng())); });
       pb.layers.set(tr.hex, layer);
     }
     layer.pos = pos;
@@ -759,7 +768,7 @@ function render() {
     }
   }
   const followed = pb.follow && pb.layers.get(pb.follow);
-  if (followed && seen.has(pb.follow)) map.panTo(followed.marker.getLatLng(), { animate: false });
+  if (followed && seen.has(pb.follow)) map.panTo(viewFor(followed.marker.getLatLng()), { animate: false });
   for (const [hex, layer] of pb.layers) {
     if (!seen.has(hex)) { map.removeLayer(layer.marker); map.removeLayer(layer.line); pb.layers.delete(hex); }
   }
@@ -851,7 +860,7 @@ function focusIfRequested() {
     syncSlider();
     layer = pb.layers.get(pb.focus);
   }
-  if (layer) { map.setView(layer.marker.getLatLng(), 10); layer.marker.openPopup(); pb.follow = pb.focus; }
+  if (layer) { map.setView(viewFor(layer.marker.getLatLng(), 10), 10); layer.marker.openPopup(); pb.follow = pb.focus; }
   pb.focus = null;
 }
 
