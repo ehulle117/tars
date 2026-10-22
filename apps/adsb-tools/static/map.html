@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27%3E%3Crect width=%2724%27 height=%2724%27 rx=%276%27 fill=%27%230B0E13%27/%3E%3Cpath transform=%27rotate(45 12 12)%27 d=%27M12 1.5C12.9 1.5 13.5 2.4 13.5 3.5V8.5L22 13.5V15.5L13.5 13V18.5L16 20.5V22L12 21L8 22V20.5L10.5 18.5V13L2 15.5V13.5L10.5 8.5V3.5C10.5 2.4 11.1 1.5 12 1.5Z%27 fill=%27%238B7CFF%27/%3E%3C/svg%3E">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ADS-B Console · Live</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -324,6 +325,7 @@ const fmtKm = km => km < 10 ? km.toFixed(1) : km.toFixed(0);
 
 function initMap(lat, lon) {
   map = L.map('map', { zoomControl: false }).setView([lat, lon], 8);
+  map.on('dragstart', () => { pb.follow = null; });  // panning by hand stops following
   window.leafletMap = map;  // read by hub.html to sync panning/zoom
   L.control.zoom({ position: 'bottomright' }).addTo(map);
   // CARTO's dark basemap now needs an API key; OSM tiles darkened in CSS (.leaflet-tile-pane) instead.
@@ -535,10 +537,10 @@ async function poll() {
       } else {
         const hex = a.hex;
         markers[hex] = L.marker([a.lat, a.lon], { icon: planeIcon(a.track, label, a.alt_baro) }).addTo(map)
-          .on('click', () => { if (isPhone()) selectCard(hex, true); });
+          .on('click', () => { map.panTo(markers[hex].getLatLng()); if (isPhone()) selectCard(hex, true); });
       }
       if (isPhone()) markers[a.hex].unbindPopup();  // phone: the card strip replaces popups
-      else markers[a.hex].bindPopup(popupContent(a), { maxWidth: 280 });
+      else markers[a.hex].bindPopup(popupContent(a), { maxWidth: 280, autoPan: false });
       updateLiveTrail(a, data.server_now);
 
       if (focusHex && !focusAt && !focusedLive && a.hex.toLowerCase() === focusHex.toLowerCase()) {
@@ -743,7 +745,8 @@ function render() {
         line: L.polyline(trail, { color: altColor(pos.alt), weight: 2, opacity: 0.7, interactive: false }).addTo(map),
         heading: pos.heading,
       };
-      layer.marker.bindPopup(() => playbackPopup(tr, layer.pos, pb.t), { maxWidth: 280 });
+      layer.marker.bindPopup(() => playbackPopup(tr, layer.pos, pb.t), { maxWidth: 280, autoPan: false });
+      layer.marker.on('click', () => { pb.follow = tr.hex; map.panTo(layer.marker.getLatLng()); });
       pb.layers.set(tr.hex, layer);
     }
     layer.pos = pos;
@@ -755,6 +758,8 @@ function render() {
       if (icon) icon.style.transform = `rotate(${pos.heading}deg)`;
     }
   }
+  const followed = pb.follow && pb.layers.get(pb.follow);
+  if (followed && seen.has(pb.follow)) map.panTo(followed.marker.getLatLng(), { animate: false });
   for (const [hex, layer] of pb.layers) {
     if (!seen.has(hex)) { map.removeLayer(layer.marker); map.removeLayer(layer.line); pb.layers.delete(hex); }
   }
@@ -846,7 +851,7 @@ function focusIfRequested() {
     syncSlider();
     layer = pb.layers.get(pb.focus);
   }
-  if (layer) { map.setView(layer.marker.getLatLng(), 10); layer.marker.openPopup(); }
+  if (layer) { map.setView(layer.marker.getLatLng(), 10); layer.marker.openPopup(); pb.follow = pb.focus; }
   pb.focus = null;
 }
 
@@ -876,6 +881,7 @@ function goLive() {
   pb.loading = false;
   if (map) clearPlaybackLayers();
   pb.active = false;
+  pb.follow = null;
   $('pb-live').className = 'live';
   $('pb-live').textContent = 'LIVE';
   document.body.classList.remove('replay', 'tl-open');
