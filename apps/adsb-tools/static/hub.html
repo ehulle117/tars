@@ -15,6 +15,10 @@
   .pane header { flex: none; display: flex; justify-content: space-between; padding: 4px 8px; font-size: 12px; color: #8fa3c0; }
   .pane header button { background: none; border: 0; color: inherit; cursor: pointer; font-size: 14px; }
   .pane iframe { flex: 1; border: 0; width: 100%; }
+  .divider { flex: none; width: 6px; margin: 0 -2px; cursor: col-resize; background: #263044; border-radius: 3px; touch-action: none; }
+  .divider[hidden] { display: none; }
+  body.dragging { cursor: col-resize; user-select: none; }
+  body.dragging iframe { pointer-events: none; }
   #empty { margin: auto; color: #5f6f88; }
 </style>
 </head>
@@ -31,6 +35,17 @@ const bar = document.getElementById('bar');
 const panes = document.getElementById('panes');
 const empty = document.getElementById('empty');
 
+let ratio = 50;  // % of the width given to the first window when both are open
+const divider = document.createElement('div');
+divider.className = 'divider';
+divider.title = 'Drag to resize';
+
+function applyRatio() {
+  const both = WINDOWS.every(w => w.open);
+  divider.hidden = !both;
+  WINDOWS[0].pane.style.flex = both ? `0 0 ${ratio}%` : '';
+}
+
 function refresh() {
   const anyOpen = WINDOWS.some(w => w.open);
   empty.hidden = anyOpen;
@@ -40,6 +55,7 @@ function refresh() {
     // Load on first open so Leaflet initialises at its real size.
     if (w.open && !w.frame.src) w.frame.src = w.src;
   }
+  applyRatio();
 }
 
 for (const w of WINDOWS) {
@@ -55,6 +71,15 @@ for (const w of WINDOWS) {
   w.pane.querySelector('button').onclick = () => { w.open = false; refresh(); };
   panes.appendChild(w.pane);
 }
+panes.insertBefore(divider, WINDOWS[1].pane);  // assumes exactly two windows
+divider.onpointerdown = e => { divider.setPointerCapture(e.pointerId); document.body.classList.add('dragging'); };
+divider.onpointermove = e => {
+  if (!divider.hasPointerCapture(e.pointerId)) return;
+  const r = panes.getBoundingClientRect();
+  ratio = Math.min(85, Math.max(15, (e.clientX - r.left) / r.width * 100));
+  applyRatio();
+};
+divider.onpointerup = () => document.body.classList.remove('dragging');
 refresh();
 
 // Keep the two Leaflet maps at the same center and zoom. Same-origin iframes,
