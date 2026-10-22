@@ -8,7 +8,9 @@ sdr-waterfall/server.py (no Flask needed for two routes).
 Usage: python3 map_server.py <state.json> [port]
 """
 import json
+import os
 import sys
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -17,6 +19,13 @@ from photo_lookup import get_photo
 from closest_approach import leaderboard
 
 STATIC_DIR = Path(__file__).parent / "static"
+# In-cluster Service name; override for local dev.
+COVERAGE_UPSTREAM = os.environ.get("COVERAGE_UPSTREAM", "http://adsb-tools-coverage-svc:8767")
+
+
+def coverage_url(path: str) -> str:
+    """/coverage/x -> <upstream>/x (path always starts with '/', so the host can't be changed)."""
+    return COVERAGE_UPSTREAM + path[len("/coverage"):]
 
 
 def build_response(state_path: str) -> dict:
@@ -65,6 +74,26 @@ def make_handler(state_path: str):
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+            elif self.path.startswith("/coverage/"):
+                try:
+                    with urllib.request.urlopen(coverage_url(self.path), timeout=10) as up:
+                        body, ctype = up.read(), up.headers.get("Content-Type", "text/html")
+                    status = 200
+                except Exception:
+                    body, ctype, status = b"coverage service unreachable", "text/plain", 502
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif self.path == "/hub":
+                index = (STATIC_DIR / "hub.html").read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(index)))
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(index)
             else:
                 index = (STATIC_DIR / "map.html").read_bytes()
                 self.send_response(200)
@@ -80,6 +109,8 @@ def make_handler(state_path: str):
 def _self_check() -> None:
     import tempfile, os
     global lookup_route, get_photo, leaderboard
+    assert coverage_url("/coverage/coverage.json") == COVERAGE_UPSTREAM + "/coverage.json"
+    assert coverage_url("/coverage/") == COVERAGE_UPSTREAM + "/"
     orig_lookup, orig_photo, orig_leaderboard = lookup_route, get_photo, leaderboard
     lookup_route = lambda hex_: {"type": "TEST"}  # avoid real network calls
     get_photo = lambda hex_, t, m: {"url": "http://example.com/test.jpg"}

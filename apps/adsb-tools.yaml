@@ -106,6 +106,7 @@ spec:
       containers:
         - name: map
           image: ghcr.io/ehulle117/tars-adsb-tools:main
+          imagePullPolicy: Always
           command: ["python3", "map_server.py", "/app/state.json", "8766"]
           workingDir: /app
           ports:
@@ -165,6 +166,7 @@ spec:
       containers:
         - name: coverage
           image: ghcr.io/ehulle117/tars-adsb-tools:main
+          imagePullPolicy: Always
           command: ["python3", "coverage_server.py", "/app/adsb_tools.db", "8767"]
           workingDir: /app
           ports:

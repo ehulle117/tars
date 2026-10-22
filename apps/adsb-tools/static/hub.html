@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADS-B Hub</title>
+<style>
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column; font-family: system-ui, sans-serif; background: #0b0d12; color: #cfd8e3; }
+  #bar { height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 13px; }
+  #bar button { background: #11141c; color: #cfd8e3; border: 1px solid #263044; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  #bar button.on { background: #1d2a44; border-color: #4a6fa5; }
+  #panes { flex: 1; min-height: 0; display: flex; gap: 4px; padding: 0 4px 4px; }
+  .pane { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #11141c; border: 1px solid #263044; }
+  .pane[hidden] { display: none; }
+  .pane header { flex: none; display: flex; justify-content: space-between; padding: 4px 8px; font-size: 12px; color: #8fa3c0; }
+  .pane header button { background: none; border: 0; color: inherit; cursor: pointer; font-size: 14px; }
+  .pane iframe { flex: 1; border: 0; width: 100%; }
+  #empty { margin: auto; color: #5f6f88; }
+</style>
+</head>
+<body>
+  <div id="bar">ADS-B —</div>
+  <div id="panes"><div id="empty">Open a window above.</div></div>
+<script>
+// Relative URLs so this works behind any proxy hostname.
+const WINDOWS = [
+  { id: 'map', title: 'Live map', src: '/', open: true },
+  { id: 'coverage', title: 'Coverage', src: '/coverage/', open: false },
+];
+const bar = document.getElementById('bar');
+const panes = document.getElementById('panes');
+const empty = document.getElementById('empty');
+
+function refresh() {
+  const anyOpen = WINDOWS.some(w => w.open);
+  empty.hidden = anyOpen;
+  for (const w of WINDOWS) {
+    w.btn.classList.toggle('on', w.open);
+    w.pane.hidden = !w.open;
+    // Load on first open so Leaflet initialises at its real size.
+    if (w.open && !w.frame.src) w.frame.src = w.src;
+  }
+}
+
+for (const w of WINDOWS) {
+  w.btn = document.createElement('button');
+  w.btn.textContent = w.title;
+  w.btn.onclick = () => { w.open = !w.open; refresh(); };
+  bar.appendChild(w.btn);
+
+  w.pane = document.createElement('section');
+  w.pane.className = 'pane';
+  w.pane.innerHTML = `<header><span>${w.title}</span><button title="Close">&times;</button></header><iframe></iframe>`;
+  w.frame = w.pane.querySelector('iframe');
+  w.pane.querySelector('button').onclick = () => { w.open = false; refresh(); };
+  panes.appendChild(w.pane);
+}
+refresh();
+</script>
+</body>
+</html>

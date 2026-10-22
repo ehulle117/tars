@@ -72,7 +72,7 @@ function drawPolar(points, maxRange) {
 }
 
 async function load() {
-  const res = await fetch('/coverage.json');
+  const res = await fetch('coverage.json');
   const data = await res.json();
   const points = data.points;
   if (!points.length) return;
