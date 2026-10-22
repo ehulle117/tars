@@ -41,6 +41,12 @@
   button.danger { background: var(--warn); }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .5rem; }
   .inline { display: inline; }
+  .upnext { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: .75rem; }
+  .task { display: flex; flex-direction: column; gap: .35rem; margin: 0; }
+  .task.due { border-color: var(--accent); }
+  .task .when { font-size: .8rem; color: var(--muted); }
+  .task.due .when { color: var(--accent); font-weight: 600; }
+  .task b { font-size: 1.02rem; }
   .badge { font-size: .8rem; color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: .05rem .5rem; white-space: nowrap; }
 </style>
 {% block head %}{% endblock %}

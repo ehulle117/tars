@@ -229,3 +229,34 @@ def test_units_and_equipment():
     eid = db("SELECT id FROM expense WHERE batch_id=?", bid)[0]
     c.post(f"/batch/{bid}/expense/{eid}/delete")  # undo returns the converted grams
     assert db("SELECT qty FROM inventory WHERE id=?", fk)[0] == approx(100)
+
+
+def test_up_next_batch_panel_and_settle_up():
+    from datetime import date, timedelta
+    today = date.today()
+    bid = int(c.post("/batch", data={"name": "next-check"}).url.path.split("/")[-1])
+    c.post(f"/batch/{bid}", data={"name": "next-check", "status": "secondary", "volume_gal": "1", "n_need": "low",
+                                  "nutrient_protocol": "recipe", "start_date": (today - timedelta(days=20)).isoformat()})
+    c.post(f"/batch/{bid}/reading", data={"taken_on": (today - timedelta(days=20)).isoformat(), "sg": "1.100"})
+    c.post(f"/batch/{bid}/reading", data={"taken_on": (today - timedelta(days=9)).isoformat(), "sg": "1.010"})
+    home = c.get("/").text  # re-check was due 2 days ago
+    assert "Up next" in home and "Overdue since " + main.day(today - timedelta(days=2)) in home
+    page = c.get(f"/batch/{bid}").text
+    assert 'id="log-reading"' in page and "Gravity today" in page
+    c.post(f"/batch/{bid}/reading", data={"taken_on": today.isoformat(), "sg": "1.010"})  # stable now
+    assert "Due today" in c.get("/").text and "Stabilize" in c.get("/").text
+    r = c.post(f"/batch/{bid}/event", data={"kind": "stabilize", "back": "/"}, follow_redirects=False)
+    assert r.headers["location"] == "/"  # Mark done on the dashboard returns there
+    r = c.post(f"/batch/{bid}/event", data={"kind": "note", "back": "//evil.example"}, follow_redirects=False)
+    assert r.headers["location"] == f"/batch/{bid}"  # no off-site redirects
+    assert "Backsweeten on or after " + main.day(today + timedelta(days=1)) in c.get("/").text
+
+    con = main.db()
+    con.execute("DELETE FROM payment")
+    con.execute("INSERT INTO payment (paid_on, paid_by, amount, item) VALUES ('2026-01-01', 'Ethan', 100, 'honey')")
+    con.execute("INSERT INTO payment (paid_on, paid_by, amount, item) VALUES ('2026-01-01', 'Gabe', 40, 'yeast')")
+    con.commit()
+    assert "Gabe owes Ethan $30.00" in c.get("/money").text
+    c.post("/money", data={"paid_by": "Gabe", "paid_to": "Ethan", "amount": "30.00", "item": "Settle up"})
+    page = c.get("/money").text
+    assert "owes Ethan" not in page and "All square." in page

@@ -1,5 +1,24 @@
 {% extends "base.html" %}
 {% block body %}
+{% if upnext %}
+<h2 style="margin-top:.5rem">Up next</h2>
+<div class="upnext">
+  {% for b, s in upnext %}{% set due = s.due is not none and s.due <= today %}
+  <section class="task{{ ' due' if due }}">
+    <span class="when">{{ s.due_label }}</span>
+    <b>{% if s.next_link %}<a href="{{ s.next_link }}" target="_blank" rel="noopener">{{ s.next }}</a>{% else %}{{ s.next }}{% endif %}</b>
+    <span class="muted"><a href="/batch/{{ b.id }}">{{ b.name }}</a> · {{ s.state }}</span>
+    <div class="row" style="display:flex;gap:.5rem;align-items:center;margin-top:.25rem">
+      {% if s.done_kind %}<form class="inline" method="post" action="/batch/{{ b.id }}/event">
+        <input type="hidden" name="kind" value="{{ s.done_kind }}"><input type="hidden" name="back" value="/">
+        <button>Mark done</button></form>
+      {% elif not s.next_link %}<a href="/batch/{{ b.id }}#log-reading">Log a reading</a>{% endif %}
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% endif %}
+
 <form class="row" method="post" action="/batch">
   <input name="name" placeholder="New batch name" required>
   <button>Start planning</button>

@@ -171,31 +171,51 @@ def stats(con, b) -> dict:
         s["cost_bottle"] = s["cost_gal"] / BOTTLES_PER_GAL
     if b["start_date"]:
         s["days"] = (date.today() - date.fromisoformat(b["start_date"])).days
-    s["state"], s["next"], s["next_link"] = next_action(b, s, kinds, stabilized[-1] if stabilized else None)
+    s["state"], s["next"], s["next_link"], s["due"], s["done_kind"] = next_action(
+        b, s, kinds, stabilized[-1] if stabilized else None)
+    s["due_label"] = due_label(s["due"]) if s["next"] else None
     return s
 
 
 def next_action(b, s, kinds, stabilized_on=None):
-    """(where the batch is, what to do next, guide link), following the wiki's process."""
+    """(where the batch is, what to do next, guide link, due date or None, event that marks it done or None),
+    following the wiki's process."""
     if b["status"] not in ("primary", "secondary", "aging"):
-        return None, None, None
+        return None, None, None, None, None
+    today = date.today()
     if s.get("tosna") and s["nutrient_done"] < 4 and b["status"] == "primary":
-        d = s["tosna"]["doses"][s["nutrient_done"]]
-        return "Fermenting", f"Nutrient dose {s['nutrient_done'] + 1}: {d['g']} g Fermaid-O {d['when']}", None
+        n = s["nutrient_done"]
+        d = s["tosna"]["doses"][n]
+        due = date.fromisoformat(b["start_date"]) + timedelta(days=(1, 2, 3, 7)[n]) if b["start_date"] else today
+        return "Fermenting", f"Nutrient dose {n + 1}: {d['g']} g Fermaid-O {d['when']}", None, due, "nutrient"
     if len(s["reads"]) < 2:
-        return "Just pitched", "Take a gravity reading", None
+        return "Just pitched", "Take a gravity reading", None, today, None
     if not s["stable"]:
         recheck = date.fromisoformat(s["reads"][-1]["taken_on"]) + timedelta(days=7)
-        return "Fermenting", f"Re-check gravity on {day(recheck)}", None
+        return "Fermenting", f"Re-check gravity on {day(recheck)}", None, recheck, None
     top = b["target_fg_max"] or b["target_fg"]
     if top and s["cur"] > top + 0.002:
-        return "Possibly stuck", "Stable above target FG: check for a stuck fermentation", WIKI + "protocol/stuck_fermentation"
+        return ("Possibly stuck", "Stable above target FG: check for a stuck fermentation",
+                WIKI + "protocol/stuck_fermentation", today, None)
     if "stabilize" not in kinds:
-        return "Stable", "Stabilize (K-meta + sorbate)", WIKI + "process/stabilization"
+        return "Stable", "Stabilize (K-meta + sorbate)", WIKI + "process/stabilization", today, "stabilize"
     if "backsweeten" not in kinds and "bottle" not in kinds:
-        after = f"on or after {day(date.fromisoformat(stabilized_on) + timedelta(days=1))}" if stabilized_on else "after 24 h"
-        return "Stabilized", f"Backsweeten {after} if wanted", WIKI + "process/back_sweeten"
-    return "Aging", "Bottle when clear, or keep aging", WIKI + "process/packaging"
+        ok = date.fromisoformat(stabilized_on) + timedelta(days=1) if stabilized_on else today
+        after = f"on or after {day(ok)}" if stabilized_on else "after 24 h"
+        return "Stabilized", f"Backsweeten {after} if wanted", WIKI + "process/back_sweeten", ok, "backsweeten"
+    return "Aging", "Bottle when clear, or keep aging", WIKI + "process/packaging", None, "bottle"
+
+
+def due_label(due) -> str:
+    """'Due today', 'Overdue since Mon Oct 19', 'Wed Oct 28 · in 7 days', or no date at all."""
+    if due is None:
+        return "Whenever it's clear"
+    days = (due - date.today()).days
+    if days < 0:
+        return f"Overdue since {day(due)}"
+    if days == 0:
+        return "Due today"
+    return f"{day(due)} · in {days} day{'s' if days != 1 else ''}"
 
 
 @app.get("/")
@@ -205,7 +225,10 @@ def index(request: Request):
         groups = {st: [] for st in STATUSES[:-1]}
         for b in rows:
             groups[b["status"]].append((b, stats(con, b)))
-    return tpl.TemplateResponse(request, "index.html", {"groups": groups})
+    upnext = sorted(((b, s) for g in groups.values() for b, s in g if s["next"]),
+                    key=lambda bs: bs[1]["due"] or date.max)
+    return tpl.TemplateResponse(request, "index.html", {"groups": groups, "upnext": upnext,
+                                                        "today": date.today()})
 
 
 @app.get("/recipes")
@@ -339,7 +362,8 @@ async def add_event(bid: int, request: Request):
         con.execute("INSERT INTO event (batch_id, on_date, kind, note, rating) VALUES (?,?,?,?,?)",
                     (bid, f.get("on_date") or date.today().isoformat(), f.get("kind"), f.get("note"),
                      None if rating is None else int(rating)))
-    return back(f"/batch/{bid}")
+    dest = f.get("back") or ""  # Mark done on the dashboard returns there; only same-site paths
+    return back(dest if dest.startswith("/") and not dest.startswith("//") else f"/batch/{bid}")
 
 
 @app.post("/batch/{bid}/expense")
@@ -470,8 +494,15 @@ def money(request: Request):
                            "ORDER BY p.paid_on DESC, p.id DESC").fetchall()
     spent = sum(r["amount"] for r in rows if not r["paid_to"])
     unassigned = sum(r["amount"] for r in rows if not r["paid_by"])
+    bal = balances(rows)
+    settle = None  # two people: who pays whom to even out
+    if len(bal) == 2:
+        (debtor, owes), (creditor, _) = sorted(bal.items(), key=lambda kv: kv[1])
+        if owes < -0.005:
+            settle = {"from": debtor, "to": creditor, "amount": round(-owes, 2)}
+            bal[creditor] = settle["amount"]  # rounded separately they can differ by a cent
     return tpl.TemplateResponse(request, "money.html", {
-        "rows": rows, "bal": balances(rows), "spent": spent, "unassigned": unassigned,
+        "rows": rows, "bal": bal, "settle": settle, "spent": spent, "unassigned": unassigned,
         "editing": "edit" in request.query_params, "today": date.today().isoformat()})
 
 

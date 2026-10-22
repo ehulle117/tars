@@ -5,7 +5,22 @@
 <h1 style="margin:.25rem 0">{{ b.name }} <span class="muted" style="font-size:1rem">{{ b.status }}</span>{% if s.style_class %} <span class="badge">{{ s.style_class }}</span>{% endif %}</h1>
 {% if b.source_url %}<p class="muted">Source: <a href="{{ b.source_url }}" target="_blank" rel="noopener">{{ b.source_url }}</a></p>{% endif %}
 {% if b.status == "recipe" %}<form method="post" action="/batch/{{ b.id }}/clone"><button>Brew this →</button> <span class="muted">copies it into a planned batch</span></form>{% endif %}
-{% if s.next %}<p class="next"><span class="badge">{{ s.state }}</span> → {% if s.next_link %}<a href="{{ s.next_link }}" target="_blank" rel="noopener">{{ s.next }}</a>{% else %}{{ s.next }}{% endif %}</p>{% endif %}
+{% if s.next %}
+<section id="log-reading" class="task{{ ' due' if s.due is not none and s.due.isoformat() <= today }}" style="margin-top:.75rem">
+  <span class="when">{{ s.due_label }} · {{ s.state }}</span>
+  <b class="next">{% if s.next_link %}<a href="{{ s.next_link }}" target="_blank" rel="noopener">{{ s.next }}</a>{% else %}{{ s.next }}{% endif %}</b>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;align-items:end">
+    <form class="row" method="post" action="/batch/{{ b.id }}/reading" style="margin-top:0">
+      <input type="hidden" name="taken_on" value="{{ today }}">
+      <label>Gravity today<input name="sg" type="number" step="0.001" min="0.980" max="1.200" required placeholder="{{ '%.3f'|format(s.reads[-1].sg) if s.reads else '1.100' }}"></label>
+      <label>Temp °F<input name="temp_f" type="number" step="0.1" placeholder="optional"></label>
+      <button>Save reading</button>
+    </form>
+    {% if s.done_kind %}<form class="inline" method="post" action="/batch/{{ b.id }}/event">
+      <input type="hidden" name="kind" value="{{ s.done_kind }}"><button>Mark done: {{ s.done_kind }}</button></form>{% endif %}
+  </div>
+</section>
+{% endif %}
 
 <section class="stats">
   <div><small>OG{% if s.reads %} (measured){% elif s.est_og %} (est.){% else %} (target){% endif %}</small><b>{{ "%.3f"|format(s.og) if s.og else "—" }}</b></div>

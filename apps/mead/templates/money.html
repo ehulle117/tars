@@ -4,6 +4,14 @@
 <h1 style="margin:.25rem 0">Who paid</h1>
 <p class="muted">Shared brewing costs, split evenly between everyone listed. "Paid by" on Inventory and on a batch's Add cost adds purchases here too.</p>
 
+{% if settle %}<section class="task due" style="flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.75rem">
+  <span style="font-size:1.3rem"><b style="font-size:inherit">{{ settle.from }} owes {{ settle.to }} {{ "$%.2f"|format(settle.amount) }}</b> <span class="muted" style="font-size:.95rem">to even out</span></span>
+  <form class="inline" method="post" action="/money" onsubmit="return confirm('Record {{ settle.from|e }} paying {{ settle.to|e }} {{ "$%.2f"|format(settle.amount) }}?')">
+    <input type="hidden" name="paid_by" value="{{ settle.from }}"><input type="hidden" name="paid_to" value="{{ settle.to }}">
+    <input type="hidden" name="amount" value="{{ '%.2f'|format(settle.amount) }}"><input type="hidden" name="item" value="Settle up">
+    <button>Record {{ settle.from }} paying {{ "$%.2f"|format(settle.amount) }}</button>
+  </form>
+</section>{% elif bal|length == 2 %}<p class="muted">All square.</p>{% endif %}
 {% if rows %}<section class="stats">
   <div><small>Spent together</small><b>{{ "$%.2f"|format(spent) }}</b></div>
   {% if unassigned %}<div><small>Unassigned (not split yet)</small><b>{{ "$%.2f"|format(unassigned) }}</b></div>{% endif %}
