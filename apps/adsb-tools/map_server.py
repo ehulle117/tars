@@ -22,7 +22,7 @@ from route_lookup import lookup_route
 from photo_lookup import get_photo
 from adsb_tools.db import get_db
 from closest_approach import leaderboard
-from fleet import build_aircraft, build_fleet
+from fleet import HEX_RE, build_aircraft, build_fleet
 
 STATIC_DIR = Path(__file__).parent / "static"
 # In-cluster Service name; override for local dev.
@@ -38,15 +38,16 @@ MAX_HISTORY_S = 48 * 3600   # cap one playback window
 MAX_HISTORY_ROWS = 150_000
 
 
-def build_history(start: float, end: float, db_path: Path | None = None) -> dict:
+def build_history(start: float, end: float, db_path: Path | None = None, hex_: str | None = None) -> dict:
     """Logged positions in [start, end] grouped per aircraft, for playback.
     Positions are sampled ~1/min per aircraft, so the client interpolates."""
     end = min(end, start + MAX_HISTORY_S)
     conn = get_db(db_path) if db_path else get_db()
+    one = " AND hex = ?" if hex_ else ""
     rows = conn.execute(
         "SELECT hex, seen_at, lat, lon, alt_baro FROM positions "
-        "WHERE seen_at BETWEEN ? AND ? ORDER BY hex, seen_at LIMIT ?",
-        (start, end, MAX_HISTORY_ROWS),
+        f"WHERE seen_at BETWEEN ? AND ?{one} ORDER BY hex, seen_at LIMIT ?",
+        (start, end, *([hex_] if hex_ else []), MAX_HISTORY_ROWS),
     ).fetchall()
     # Later sessions overwrite earlier ones, so a hex that changed callsign gets its latest.
     names = dict(conn.execute(
@@ -162,10 +163,13 @@ def make_handler(state_path: str):
                     now = time.time()
                     end = float(q.get("to", [now])[0])
                     start = float(q.get("from", [end - 3600])[0])
-                    payload = json.dumps(build_history(start, end)).encode()
+                    hex_ = q.get("hex", [None])[0]
+                    if hex_ is not None and not HEX_RE.match(hex_.lower()):
+                        raise ValueError
+                    payload = json.dumps(build_history(start, end, hex_=hex_ and hex_.lower())).encode()
                     status = 200
                 except ValueError:
-                    payload, status = b'{"error": "from/to must be unix timestamps"}', 400
+                    payload, status = b'{"error": "from/to must be unix timestamps, hex a 6-digit hex"}', 400
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
@@ -251,6 +255,8 @@ def _self_check() -> None:
         assert [p[0] for p in by["abc"]["pts"]] == [100.0, 160.0] and by["abc"]["flight"] == "TST1", h
         assert by["def"]["flight"] is None and h["bounds"] == [100.0, 9999.0], h
         assert build_history(0.0, 10 * MAX_HISTORY_S, dbp)["to"] == MAX_HISTORY_S, "window must be capped"
+        one = build_history(100.0, 200.0, dbp, hex_="def")
+        assert [t["hex"] for t in one["tracks"]] == ["def"], one
         act = build_activity(100.0, 200.0, 2, dbp)  # buckets [100,150) and [150,200)
         assert act["buckets"] == [[2, 2, 1.0, 1.0], [1, 1, 1.0, 1.0]] and act["seen"] == 1, act
         assert act["farthest"]["hex"] in ("abc", "def") and act["closest"]["km"] == 1.0, act

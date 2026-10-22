@@ -327,6 +327,7 @@ const fmtKm = km => km < 10 ? km.toFixed(1) : km.toFixed(0);
 function initMap(lat, lon) {
   map = L.map('map', { zoomControl: false }).setView([lat, lon], 8);
   map.on('dragstart', () => { pb.follow = null; });  // panning by hand stops following
+  map.on('popupclose', e => { if (selTrackHex && e.popup._source === markers[selTrackHex]) clearFullTrack(); });
   // Popups grow after their photo loads, so cap them in CSS to the room above a parked plane.
   const setPopMax = () => map.getContainer().style.setProperty('--popmax', Math.max(200, map.getSize().y * 0.75 - 60) + 'px');
   setPopMax();
@@ -423,9 +424,31 @@ function viewFor(latlng, zoom) {
 }
 const popMaxH = () => (map ? Math.max(240, Math.round(map.getSize().y * 0.68)) : 420);
 
+// Clicking a live aircraft draws its whole current flight from the log, not just what this page has seen.
+let selTrack = null, selTrackHex = null;
+function clearFullTrack() {
+  if (selTrack) map.removeLayer(selTrack);
+  selTrack = null;
+  selTrackHex = null;
+}
+async function showFullTrack(hex) {
+  if (hex === selTrackHex) return;
+  clearFullTrack();
+  selTrackHex = hex;
+  let d;
+  try { d = await fetchJson(`history.json?from=${pb.now - 6 * 3600}&to=${pb.now}&hex=${encodeURIComponent(hex)}`); } catch (e) { return; }
+  if (selTrackHex !== hex || pb.active || !d.tracks.length) return;
+  const segs = splitSegments(d.tracks[0].pts), seg = segs[segs.length - 1];
+  if (pb.now - seg[seg.length - 1][0] > GAP_S) return;  // last logged flight already ended
+  const pts = seg.map(p => [p[1], p[2]]);
+  if (markers[hex]) pts.push(markers[hex].getLatLng());
+  selTrack = L.polyline(pts, { color: '#F2F5F9', weight: 2.5, opacity: 0.85, dashArray: '5 5', interactive: false }).addTo(map);
+}
+
 function focusLive(hex) {
   const m = markers[hex];
   if (!m) return false;
+  showFullTrack(hex);
   if (isPhone()) { selectCard(hex, true); map.flyTo(m.getLatLng(), Math.max(map.getZoom(), 10)); return true; }
   const z = Math.max(map.getZoom(), 10);
   map.flyTo(viewFor(m.getLatLng(), z), z);
@@ -487,6 +510,7 @@ function renderCards(scroll) {
 }
 function selectCard(hex, scroll) {
   selHex = hex;
+  if (hex) showFullTrack(hex); else clearFullTrack();
   renderCards(scroll);
 }
 $('card-track').addEventListener('touchstart', () => { cardTouch = true; }, { passive: true });
@@ -551,7 +575,7 @@ async function poll() {
       } else {
         const hex = a.hex;
         markers[hex] = L.marker([a.lat, a.lon], { icon: planeIcon(a.track, label, a.alt_baro) }).addTo(map)
-          .on('click', () => { map.panTo(viewFor(markers[hex].getLatLng())); if (isPhone()) selectCard(hex, true); });
+          .on('click', () => { showFullTrack(hex); map.panTo(viewFor(markers[hex].getLatLng())); if (isPhone()) selectCard(hex, true); });
       }
       if (isPhone()) markers[a.hex].unbindPopup();  // phone: the card strip replaces popups
       else markers[a.hex].bindPopup(popupContent(a), { maxWidth: 280, maxHeight: popMaxH(), autoPan: false });
@@ -566,6 +590,8 @@ async function poll() {
     for (const hex of Object.keys(markers)) {
       if (!seen.has(hex)) { map.removeLayer(markers[hex]); delete markers[hex]; }
     }
+    if (selTrackHex && !seen.has(selTrackHex)) clearFullTrack();
+    else if (selTrack && markers[selTrackHex]) selTrack.addLatLng(markers[selTrackHex].getLatLng());
     for (const hex of Object.keys(trails)) {
       if (!seen.has(hex)) { map.removeLayer(trails[hex].line); delete trails[hex]; }
     }
@@ -871,6 +897,7 @@ function focusIfRequested() {
 
 function enterPlayback() {
   pb.active = true;
+  clearFullTrack();
   clearLive();
   $('pb-live').className = '';
   $('pb-live').textContent = 'Back to live';
