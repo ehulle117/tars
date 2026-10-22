@@ -37,7 +37,8 @@
   .top nav { display: flex; flex-wrap: wrap; gap: .15rem; flex: 1 1 auto; }
   .top nav a { padding: .45rem .75rem; border-radius: 8px; color: var(--muted); text-decoration: none; white-space: nowrap; }
   .top nav a.on { background: var(--raised); color: var(--fg); font-weight: 600; }
-  .top .actions { display: flex; gap: .5rem; align-items: center; }
+  .top .actions { display: flex; gap: .75rem; align-items: center; }
+  .whoami input { min-height: 34px; padding: .25rem .55rem; width: 6.5rem; }
   main { max-width: 1200px; margin: 0 auto; padding: 1.75rem 2rem 3.5rem; }
 
   section, .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 1.1rem 1.25rem; margin: 0 0 1rem; }
@@ -120,11 +121,20 @@
     <a href="/" class="{{ 'on' if path == '/' or path.startswith('/batch') }}">Batches</a>
     <a href="/recipes" class="{{ 'on' if path.startswith('/recipes') }}">Recipes</a>
     <a href="/inventory" class="{{ 'on' if path.startswith('/inventory') }}">Inventory</a>
+    <a href="/shopping" class="{{ 'on' if path.startswith('/shopping') }}">Shopping</a>
     <a href="/money" class="{{ 'on' if path.startswith('/money') }}">Who paid</a>
     <a href="/calc" class="{{ 'on' if path.startswith('/calc') }}">Calculators</a>
     <a href="/feedback?from={{ path|urlencode }}" class="{{ 'on' if path.startswith('/feedback') }}">Feedback</a>
   </nav>
-  <div class="actions"><a class="btn" href="/log">Log a reading</a></div>
+  <div class="actions">
+    {% set me = request.cookies.get("who") %}
+    <form method="post" action="/who" class="whoami" title="Your name goes on readings, log entries and costs you add from this device">
+      <input type="hidden" name="back" value="{{ request.url.path }}">
+      <label style="flex-direction:row;align-items:center;gap:.4rem">{{ "You:" if me else "Who are you?" }}
+        <input name="who" list="payers" value="{{ me or '' }}" placeholder="name" size="7" onchange="this.form.submit()" aria-label="Your name"></label>
+    </form>
+    <a class="btn" href="/log">Log a reading</a>
+  </div>
 </header>
 <main>{% block body %}{% endblock %}</main>
 <datalist id="payers">{% for p in payers() %}<option>{{ p }}</option>{% endfor %}</datalist>

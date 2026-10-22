@@ -1,5 +1,7 @@
 """Mead log: FastAPI + stdlib sqlite3 + Jinja templates."""
+import math
 import os
+import re
 import sqlite3
 from datetime import date, datetime, timedelta
 from typing import Optional
@@ -52,10 +54,18 @@ CREATE TABLE IF NOT EXISTS expense (
 CREATE TABLE IF NOT EXISTS payment (
   id INTEGER PRIMARY KEY, paid_on TEXT NOT NULL, paid_by TEXT NOT NULL, amount REAL NOT NULL, item TEXT NOT NULL,
   paid_to TEXT, note TEXT, batch_id INTEGER REFERENCES batch ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS shopping (
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, qty REAL, unit TEXT, note TEXT, added_on TEXT NOT NULL, who TEXT,
+  done INTEGER NOT NULL DEFAULT 0, inventory_id INTEGER REFERENCES inventory ON DELETE SET NULL,
+  batch_id INTEGER REFERENCES batch ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, author TEXT, page TEXT, message TEXT NOT NULL,
   done INTEGER NOT NULL DEFAULT 0);
 """
+
+
+ADDED_COLUMNS = [("batch", "bottles", "INTEGER"), ("reading", "who", "TEXT"), ("event", "who", "TEXT"),
+                 ("expense", "who", "TEXT"), ("inventory", "reorder_at", "REAL")]
 
 
 def db():
@@ -67,8 +77,9 @@ def db():
 
 with db() as _c:
     _c.executescript(SCHEMA)
-    if "bottles" not in [r[1] for r in _c.execute("PRAGMA table_info(batch)")]:  # added after launch
-        _c.execute("ALTER TABLE batch ADD COLUMN bottles INTEGER")
+    for table, col, kind in ADDED_COLUMNS:  # columns added after launch; CREATE IF NOT EXISTS won't add them
+        if col not in [r[1] for r in _c.execute(f"PRAGMA table_info({table})")]:
+            _c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
     seed.run(_c)
 
 app = FastAPI()
@@ -83,6 +94,11 @@ def payers() -> list:
 
 
 tpl.env.globals["payers"] = payers
+
+
+def who(request: Request):
+    """Whoever this device says it is (the picker in the header), or None."""
+    return (request.cookies.get("who") or "").strip()[:40] or None
 tpl.env.filters["money"] = lambda v: f"${v:,.2f}"  # $1,205.85
 
 
@@ -177,7 +193,7 @@ def stats(con, b) -> dict:
     reads = [dict(r) for r in con.execute("SELECT * FROM reading WHERE batch_id=? ORDER BY taken_on, id", (b["id"],))]
     for r in reads:
         r["sg_c"] = chem.temp_correct(r["sg"], r["temp_f"]) if r["temp_f"] else r["sg"]
-    evs = con.execute("SELECT kind, on_date, note FROM event WHERE batch_id=? ORDER BY on_date, id", (b["id"],)).fetchall()
+    evs = con.execute("SELECT kind, on_date, note, who FROM event WHERE batch_id=? ORDER BY on_date, id", (b["id"],)).fetchall()
     kinds = [e[0] for e in evs]
     stabilized = [e[1] for e in evs if e[0] == "stabilize"]
     est_og = chem.estimate_og(ings, b["volume_gal"] or 0)
@@ -219,7 +235,7 @@ def stats(con, b) -> dict:
     s["cost_parts"] = [(g, groups[g]) for g in COST_GROUPS if groups.get(g)]
     # the brewing stages, ticked off from status and the log
     first = {}
-    for k, d, _ in evs:
+    for k, d, _, _ in evs:
         first.setdefault(k, d)
     pos = STAGE_POS.get(b["status"], 0)
     dates = {"primary": b["start_date"], "secondary": first.get("rack"), "stabilized": first.get("stabilize"),
@@ -228,8 +244,8 @@ def stats(con, b) -> dict:
                     "done": i < pos or (st == "stabilized" and "stabilize" in kinds)} for i, st in enumerate(STAGES)]
     # newest first: readings and log entries together
     tl = [{"on": r["taken_on"], "what": f"Reading {r['sg']:.3f}" + (f" at {r['temp_f']:g}°F" if r["temp_f"] else ""),
-           "note": r["note"]} for r in reads]
-    tl += [{"on": d, "what": k.capitalize(), "note": n} for k, d, n in evs]
+           "note": r["note"], "who": r["who"]} for r in reads]
+    tl += [{"on": d, "what": k.capitalize(), "note": n, "who": w} for k, d, n, w in evs]
     s["timeline"] = sorted(tl, key=lambda t: t["on"], reverse=True)
     if b["start_date"]:
         s["days"] = (date.today() - date.fromisoformat(b["start_date"])).days
@@ -288,8 +304,8 @@ def index(request: Request):
         for b in rows:
             groups[b["status"]].append((b, stats(con, b)))
         payments = con.execute("SELECT * FROM payment").fetchall()
-        out = con.execute("SELECT name FROM inventory WHERE kind IS NOT 'equipment' AND qty <= 0.005 "
-                          "ORDER BY name").fetchall()
+        out = [(i["name"], "Out" if i["qty"] <= 0.005 else f"{i['qty']:g} {i['unit'] or ''} left") for i in low_stock(con)]
+        shopping_open = con.execute("SELECT COUNT(*) FROM shopping WHERE done=0").fetchone()[0]
         unpriced = con.execute("SELECT COUNT(*) FROM inventory WHERE kind IS NOT 'equipment' AND qty > 0.005 "
                                "AND (unit_cost IS NULL OR unit_cost = 0)").fetchone()[0]
         bottles = con.execute("SELECT COALESCE(SUM(qty), 0) FROM inventory WHERE kind='packaging' "
@@ -300,7 +316,7 @@ def index(request: Request):
                     key=lambda bs: bs[1]["due"] or date.max)
     active = [bs for st in ("primary", "secondary", "aging") for bs in groups[st]]
     per_gal = made[0] / made[1] if made[0] else BOTTLES_PER_GAL  # your own past yield, once there is one
-    shelf = {"out": [r[0] for r in out], "unpriced": unpriced, "bottles": bottles,
+    shelf = {"out": out, "unpriced": unpriced, "bottles": bottles, "shopping": shopping_open,
              "need": round(sum(b["volume_gal"] or 0 for b, _ in active) * per_gal)}
     bal, settle = settle_up(payments)
     return tpl.TemplateResponse(request, "index.html", {
@@ -339,7 +355,9 @@ def batch_view(request: Request, bid: int):
         b = get_batch(con, bid)
         s = stats(con, b)
         events = con.execute("SELECT * FROM event WHERE batch_id=? ORDER BY on_date, id", (bid,)).fetchall()
-    return tpl.TemplateResponse(request, "batch.html", {
+        plan = plan_rows(con, b, s["ings"]) if b["status"] in ("planned", "primary") else []
+        stock_all = con.execute("SELECT * FROM inventory WHERE kind IS NOT 'equipment' ORDER BY kind, name").fetchall()
+    return tpl.TemplateResponse(request, "batch.html", {"plan": plan, "stock_all": stock_all,
         "b": b, "s": s, "events": events, "statuses": STATUSES, "kinds": KINDS, "event_kinds": EVENTS, "units": UNITS,
         "stock": con.execute("SELECT * FROM inventory WHERE qty > 0.005 AND kind IS NOT 'equipment' "
                              "ORDER BY kind, name").fetchall(),
@@ -426,9 +444,9 @@ async def add_reading(bid: int, request: Request):
         raise HTTPException(400, "SG must be between 0.980 and 1.200")
     with db() as con:
         get_batch(con, bid)
-        con.execute("INSERT INTO reading (batch_id, taken_on, sg, temp_f, ph, note) VALUES (?,?,?,?,?,?)",
+        con.execute("INSERT INTO reading (batch_id, taken_on, sg, temp_f, ph, note, who) VALUES (?,?,?,?,?,?,?)",
                     (bid, f.get("taken_on") or date.today().isoformat(), sg, num(f.get("temp_f")),
-                     num(f.get("ph")), f.get("note")))
+                     num(f.get("ph")), f.get("note"), who(request)))
     return back(f"/batch/{bid}")
 
 
@@ -462,9 +480,9 @@ async def add_event(bid: int, request: Request):
     rating = num(f.get("rating"))
     with db() as con:
         get_batch(con, bid)
-        con.execute("INSERT INTO event (batch_id, on_date, kind, note, rating) VALUES (?,?,?,?,?)",
+        con.execute("INSERT INTO event (batch_id, on_date, kind, note, rating, who) VALUES (?,?,?,?,?,?)",
                     (bid, f.get("on_date") or date.today().isoformat(), f.get("kind"), f.get("note"),
-                     None if rating is None else int(rating)))
+                     None if rating is None else int(rating), who(request)))
     dest = f.get("back") or ""  # Mark done on the dashboard returns there; only same-site paths
     return back(dest if dest.startswith("/") and not dest.startswith("//") else f"/batch/{bid}")
 
@@ -477,36 +495,163 @@ async def add_expense(bid: int, request: Request):
         raise HTTPException(400, "item and a non-negative amount required")
     with db() as con:
         get_batch(con, bid)
-        con.execute("INSERT INTO expense (batch_id, spent_on, item, amount, note) VALUES (?,?,?,?,?)",
-                    (bid, f.get("spent_on") or date.today().isoformat(), f["item"], amount, f.get("note")))
+        con.execute("INSERT INTO expense (batch_id, spent_on, item, amount, note, who) VALUES (?,?,?,?,?,?)",
+                    (bid, f.get("spent_on") or date.today().isoformat(), f["item"], amount, f.get("note"), who(request)))
         record_payment(con, f, amount, f["item"], bid)
     return back(f"/batch/{bid}")
 
 
+def take_stock(con, bid, inv_id, entered, unit, on, by):
+    """Take stock off the shelf for a batch: lowers inventory and books its cost as a batch expense."""
+    inv = con.execute("SELECT * FROM inventory WHERE id=?", (inv_id,)).fetchone()
+    if not inv or entered is None or entered <= 0:
+        raise HTTPException(400, "pick an item and a quantity")
+    unit = unit or inv["unit"]
+    qty = chem.convert(entered, unit, inv["unit"])  # in the stock's own unit, so undo puts back the same
+    if qty is None:
+        raise HTTPException(400, f"can't turn {unit} into {inv['unit']} for {inv['name']}: weigh it, or use "
+                                 f"{inv['unit']}")
+    if qty > inv["qty"] + 1e-9:
+        raise HTTPException(400, f"only {inv['qty']:g} {inv['unit']} of {inv['name']} on hand")
+    qty = min(qty, inv["qty"])
+    label = stock_label(entered, unit, inv["name"]) + ("" if unit == inv["unit"] else f" (= {qty:.4g} {inv['unit']})")
+    con.execute("UPDATE inventory SET qty = qty - ? WHERE id=?", (qty, inv["id"]))
+    con.execute("INSERT INTO expense (batch_id, spent_on, item, amount, inventory_id, qty, who) VALUES (?,?,?,?,?,?,?)",
+                (bid, on or date.today().isoformat(), label, round(qty * (inv["unit_cost"] or 0), 2), inv["id"], qty, by))
+
+
 @app.post("/batch/{bid}/use")
 async def use_stock(bid: int, request: Request):
-    """Take stock off the shelf for a batch: lowers inventory and books its cost as a batch expense."""
     f = await request.form()
-    entered, unit = num(f.get("qty")), f.get("unit") or None
     with db() as con:
         get_batch(con, bid)
-        inv = con.execute("SELECT * FROM inventory WHERE id=?", (num(f.get("inventory_id")),)).fetchone()
-        if not inv or entered is None or entered <= 0:
-            raise HTTPException(400, "pick an item and a quantity")
-        unit = unit or inv["unit"]
-        qty = chem.convert(entered, unit, inv["unit"])  # in the stock's own unit, so undo puts back the same
-        if qty is None:
-            raise HTTPException(400, f"can't turn {unit} into {inv['unit']} for {inv['name']}: weigh it, or use "
-                                     f"{inv['unit']}")
-        if qty > inv["qty"] + 1e-9:
-            raise HTTPException(400, f"only {inv['qty']:g} {inv['unit']} of {inv['name']} on hand")
-        qty = min(qty, inv["qty"])
-        label = stock_label(entered, unit, inv["name"]) + ("" if unit == inv["unit"] else f" (= {qty:.4g} {inv['unit']})")
-        con.execute("UPDATE inventory SET qty = qty - ? WHERE id=?", (qty, inv["id"]))
-        con.execute("INSERT INTO expense (batch_id, spent_on, item, amount, inventory_id, qty) VALUES (?,?,?,?,?,?)",
-                    (bid, f.get("spent_on") or date.today().isoformat(), label,
-                     round(qty * (inv["unit_cost"] or 0), 2), inv["id"], qty))
+        take_stock(con, bid, num(f.get("inventory_id")), num(f.get("qty")), f.get("unit") or None,
+                   f.get("spent_on"), who(request))
     return back(f"/batch/{bid}")
+
+
+def tokens(text: str) -> set:
+    """Words and numbers, plurals folded: 'Campden tablets' -> {'campden', 'tablet'}."""
+    return {w[:-1] if len(w) > 3 and w.endswith("s") else w for w in re.findall(r"[a-z0-9]+", (text or "").lower())}
+
+
+def match_stock(name: str, kind: str, stock):
+    """The shelf item a recipe line means, or None. Honey: any honey (the most of it). Else every word of the
+    stock item's name must be in the recipe's wording ('Lalvin 71B' fits 'Lalvin 71B-1122 (5 g)', 'Fermaid O'
+    doesn't fit 'Fermaid K'), or one squashed name holds the other ('Go-Ferm' / 'GoFerm PE')."""
+    squash = lambda t: re.sub(r"[^a-z0-9]", "", (t or "").lower())  # noqa: E731
+    if kind == "honey":
+        honey = [i for i in stock if i["kind"] == "honey"]
+        return max(honey, key=lambda i: i["qty"]) if honey else None
+    want, best = tokens(name), None
+    for i in stock:
+        if i["kind"] == "equipment" or (kind not in ("other", None) and i["kind"] not in (kind, "other")):
+            continue
+        a, b = squash(i["name"]), squash(name)
+        if (tokens(i["name"]) and tokens(i["name"]) <= want) or (len(a) >= 3 and (a in b or (len(b) >= 3 and b in a))):
+            best = best if best and best["qty"] >= i["qty"] else i
+    return best
+
+
+def plan_rows(con, b, ings):
+    """What brewing this batch takes from the shelf: one row per ingredient (plus the yeast), matched to stock,
+    converted to the stock's unit where it can be, with what's on hand and what's already been used."""
+    stock = con.execute("SELECT * FROM inventory WHERE kind IS NOT 'equipment' ORDER BY kind, name").fetchall()
+    used = dict(con.execute("SELECT inventory_id, SUM(qty) FROM expense WHERE batch_id=? AND inventory_id IS NOT NULL "
+                            "GROUP BY inventory_id", (b["id"],)).fetchall())
+    lines = [(i["name"] or i["kind"], i["kind"], i["amount"], i["unit"]) for i in ings if i["kind"] != "water"]
+    if b["yeast"]:
+        grams = re.search(r"(\d+(?:\.\d+)?)\s*g\b", b["yeast"])
+        packets = math.ceil(float(grams.group(1)) / 5) if grams and "lalvin" in b["yeast"].lower() else 1
+        lines.append((b["yeast"], "yeast", packets, "each"))
+    rows = []
+    for name, kind, amount, unit in lines:
+        inv = match_stock(name, kind, stock)
+        need = chem.convert(amount, unit, inv["unit"]) if inv and amount else None
+        rows.append({"name": name, "kind": kind, "amount": amount, "unit": unit, "inv": inv, "need": need,
+                     "have": inv["qty"] if inv else None, "used": used.get(inv["id"]) if inv else None,
+                     "enough": inv is not None and need is not None and need <= inv["qty"] + 1e-9,
+                     "later": bool(re.search(r"secondary|post", name.lower()))})
+    return rows
+
+
+@app.post("/batch/{bid}/use-many")
+async def use_many(bid: int, request: Request):
+    """The plan panel's 'Use selected from inventory': every ticked row, all or nothing."""
+    f = await request.form()
+    with db() as con:
+        get_batch(con, bid)
+        for n in sorted({k.split("-", 1)[1] for k in f.keys() if k.startswith("use-")}):
+            if f.get(f"inv-{n}") and f.get(f"qty-{n}"):
+                take_stock(con, bid, num(f.get(f"inv-{n}")), num(f.get(f"qty-{n}")), f.get(f"unit-{n}") or None,
+                           None, who(request))
+    return back(f"/batch/{bid}#plan")
+
+
+@app.post("/batch/{bid}/shortfalls")
+def add_shortfalls(bid: int, request: Request):
+    """Put whatever brewing this batch is short of on the shopping list (skipping what's already there)."""
+    with db() as con:
+        b = get_batch(con, bid)
+        ings = con.execute("SELECT * FROM ingredient WHERE batch_id=?", (bid,)).fetchall()
+        listed = {r[0].lower() for r in con.execute("SELECT name FROM shopping WHERE done=0")}
+        for r in plan_rows(con, b, ings):
+            if r["enough"] or (r["used"] and r["inv"]):
+                continue
+            inv = r["inv"]
+            name = inv["name"] if inv else r["name"]
+            if name.lower() in listed:
+                continue
+            short = r["need"] - inv["qty"] if inv and r["need"] is not None else None
+            con.execute("INSERT INTO shopping (name, qty, unit, note, added_on, who, inventory_id, batch_id) "
+                        "VALUES (?,?,?,?,?,?,?,?)",
+                        (name, round(short, 2) if short else (r["amount"] if not inv else None),
+                         inv["unit"] if short else (r["unit"] if not inv else None), f"for {b['name']}",
+                         date.today().isoformat(), who(request), inv["id"] if inv else None, bid))
+            listed.add(name.lower())
+    return back("/shopping")
+
+
+def low_stock(con):
+    """Supplies that are out, or at/below the reorder level set for them."""
+    return con.execute("SELECT * FROM inventory WHERE kind IS NOT 'equipment' AND (qty <= 0.005 OR "
+                       "(reorder_at IS NOT NULL AND qty <= reorder_at)) ORDER BY name").fetchall()
+
+
+@app.get("/shopping")
+def shopping(request: Request):
+    with db() as con:
+        items = con.execute("SELECT s.*, b.name AS batch_name FROM shopping s LEFT JOIN batch b ON b.id = s.batch_id "
+                            "ORDER BY s.done, s.id DESC").fetchall()
+        listed = {r["inventory_id"] for r in items if not r["done"] and r["inventory_id"]}
+        suggest = [i for i in low_stock(con) if i["id"] not in listed]
+    return tpl.TemplateResponse(request, "shopping.html", {
+        "open": [i for i in items if not i["done"]], "got": [i for i in items if i["done"]][:15], "suggest": suggest,
+        "units": UNITS})
+
+
+@app.post("/shopping")
+async def shopping_add(request: Request):
+    f = await request.form()
+    if not (f.get("name") or "").strip():
+        raise HTTPException(400, "what do you need?")
+    with db() as con:
+        con.execute("INSERT INTO shopping (name, qty, unit, note, added_on, who, inventory_id) VALUES (?,?,?,?,?,?,?)",
+                    (f["name"].strip(), num(f.get("qty")), f.get("unit") or None, f.get("note") or None,
+                     date.today().isoformat(), who(request), num(f.get("inventory_id"))))
+    return back("/shopping")
+
+
+@app.post("/shopping/{sid}/{action}")
+def shopping_change(sid: int, action: str):
+    with db() as con:
+        if action == "toggle":
+            con.execute("UPDATE shopping SET done = 1 - done WHERE id=?", (sid,))
+        elif action == "delete":
+            con.execute("DELETE FROM shopping WHERE id=?", (sid,))
+        else:
+            raise HTTPException(404)
+    return back("/shopping")
 
 
 @app.post("/batch/{bid}/{table}/{rid}/delete")
@@ -577,16 +722,16 @@ async def inventory_save(request: Request):
     """Edit mode's Save & done: every row at once, all or nothing."""
     f = await request.form()
     with db() as con:  # an HTTPException inside rolls the whole save back
-        for iid, r in edited_rows(f, ["name", "kind", "qty", "unit", "unit_cost", "notes"]).items():
+        for iid, r in edited_rows(f, ["name", "kind", "qty", "unit", "unit_cost", "notes", "reorder_at"]).items():
             if r["remove"]:
                 con.execute("DELETE FROM inventory WHERE id=?", (iid,))
                 continue
-            qty, cost = num(r["qty"]), num(r["unit_cost"])
+            qty, cost, reorder = num(r["qty"]), num(r["unit_cost"]), num(r["reorder_at"])
             if not (r["name"] or "").strip() or qty is None or qty < 0 or (cost is not None and cost < 0):
                 raise HTTPException(400, f"{r['name'] or 'a row'}: needs a name and a non-negative quantity; "
                                          "unit cost can't be negative. Nothing was saved.")
-            con.execute("UPDATE inventory SET kind=?, name=?, qty=?, unit=?, unit_cost=?, notes=? WHERE id=?",
-                        (r["kind"], r["name"].strip(), qty, r["unit"], cost, r["notes"] or None, iid))
+            con.execute("UPDATE inventory SET kind=?, name=?, qty=?, unit=?, unit_cost=?, notes=?, reorder_at=? WHERE id=?",
+                        (r["kind"], r["name"].strip(), qty, r["unit"], cost, r["notes"] or None, reorder, iid))
     return back("/inventory")
 
 
@@ -646,6 +791,20 @@ async def money_save(request: Request):
             con.execute("UPDATE payment SET paid_on=?, paid_by=?, item=?, amount=?, paid_to=?, note=? WHERE id=?",
                         (r["paid_on"], who, r["item"].strip(), amount, to, r["note"] or None, pid))
     return back("/money")
+
+
+@app.post("/who")
+async def set_who(request: Request):
+    """The header's "you are" picker: remembered on this device for a year."""
+    f = await request.form()
+    dest = f.get("back") or "/"
+    r = back(dest if dest.startswith("/") and not dest.startswith("//") else "/")
+    name = (f.get("who") or "").strip()[:40]
+    if name:
+        r.set_cookie("who", name, max_age=365 * 86400, samesite="lax", httponly=True)
+    else:
+        r.delete_cookie("who")
+    return r
 
 
 @app.get("/feedback")

@@ -298,3 +298,59 @@ def test_balances_ignore_row_order():
     rows = [{"paid_by": "Ethan", "paid_to": None, "amount": a} for a in (0.1, 0.2, 830.55)] + \
            [{"paid_by": "Gabe", "paid_to": None, "amount": 375.0}]
     assert main.settle_up(rows) == main.settle_up(rows[::-1])  # half-cent splits round the same way
+
+
+def test_who_is_using_this():
+    bid = int(c.post("/batch", data={"name": "who-check"}).url.path.split("/")[-1])
+    r = c.post("/who", data={"who": "Gabe", "back": f"/batch/{bid}"}, follow_redirects=False)
+    assert r.headers["location"] == f"/batch/{bid}" and "who=Gabe" in r.headers["set-cookie"]
+    c.cookies.set("who", "Gabe")
+    c.post(f"/batch/{bid}/reading", data={"sg": "1.100"})
+    c.post(f"/batch/{bid}/event", data={"kind": "pitch", "note": "71B"})
+    assert main.db().execute("SELECT who FROM reading WHERE batch_id=?", (bid,)).fetchone()[0] == "Gabe"
+    page = c.get(f"/batch/{bid}").text
+    assert 'value="Gabe"' in page and "· Gabe" in page  # picker and timeline
+    assert c.post("/who", data={"who": "x", "back": "//evil.example"}, follow_redirects=False).headers["location"] == "/"
+    c.cookies.clear()
+
+
+def test_plan_from_shelf_shopping_and_reorder():
+    con = main.db()
+    q = lambda sql, *a: con.execute(sql, a).fetchall()  # noqa: E731
+    for k, n, qty, u, paid in [("honey", "Plan honey", 10, "lb", 40), ("nutrient", "DAP", 50, "g", 5),
+                               ("yeast", "Lalvin 71B", 5, "each", 8), ("nutrient", "Fermaid O", 1, "g", 2)]:
+        c.post("/inventory", data={"kind": k, "name": n, "qty": qty, "unit": u, "paid": paid})
+    rid = q("SELECT id FROM batch WHERE name='Basic Melomel' AND status='recipe'")[0][0]
+    bid = int(c.post(f"/batch/{rid}/clone").url.path.split("/")[-1])  # Brew this -> planned batch
+    plan = {r["name"]: r for r in main.plan_rows(con, main.get_batch(con, bid), q("SELECT * FROM ingredient WHERE batch_id=?", bid))}
+    assert plan["wildflower or orange blossom"]["inv"]["kind"] == "honey" and plan["wildflower or orange blossom"]["enough"]
+    assert plan["Lalvin 71B-1122 (5 g)"]["inv"]["name"] == "Lalvin 71B" and plan["Lalvin 71B-1122 (5 g)"]["need"] == 1
+    assert plan["blueberries (secondary)"]["inv"] is None and plan["Fermaid O"]["enough"] is False  # 1.7 g, have 1
+    assert plan["raspberries (secondary)"]["later"]
+    page = c.get(f"/batch/{bid}").text
+    assert 'id="plan"' in page and "not stocked" in page and "short · 1 of 1.7 g" in page
+    honey_id = q("SELECT id FROM inventory WHERE name='Plan honey'")[0][0]
+    yeast_id = q("SELECT id FROM inventory WHERE name='Lalvin 71B'")[0][0]
+    c.post(f"/batch/{bid}/use-many", data={"use-1": "on", "inv-1": honey_id, "qty-1": "3",
+                                           "use-2": "on", "inv-2": yeast_id, "qty-2": "1", "inv-3": honey_id, "qty-3": "9"})
+    assert q("SELECT qty FROM inventory WHERE id=?", honey_id)[0][0] == 7  # unticked row 3 ignored
+    assert len(q("SELECT id FROM expense WHERE batch_id=?", bid)) == 2
+    bad = {"use-1": "on", "inv-1": honey_id, "qty-1": "1", "use-2": "on", "inv-2": yeast_id, "qty-2": "99"}
+    assert c.post(f"/batch/{bid}/use-many", data=bad).status_code == 400  # all or nothing
+    assert q("SELECT qty FROM inventory WHERE id=?", honey_id)[0][0] == 7
+    assert "used 1 each" in c.get(f"/batch/{bid}").text  # yeast already charged
+    c.post(f"/batch/{bid}/shortfalls")
+    names = {r[0]: r for r in q("SELECT name, qty, unit FROM shopping WHERE batch_id=?", bid)}
+    assert "blueberries (secondary)" in names and names["Fermaid O"][1:] == (0.7, "g") and "Lalvin 71B" not in names
+    c.post(f"/batch/{bid}/shortfalls")  # no duplicates
+    assert len(q("SELECT id FROM shopping WHERE batch_id=?", bid)) == len(names)
+
+    dap = q("SELECT id FROM inventory WHERE name='DAP'")[0][0]
+    c.post("/inventory/save", data={f"name-{dap}": "DAP", f"kind-{dap}": "nutrient", f"qty-{dap}": "50",
+                                    f"unit-{dap}": "g", f"reorder_at-{dap}": "60"})
+    assert "running low" in c.get("/inventory").text and ">Low<" in c.get("/inventory").text
+    assert "DAP" in c.get("/shopping").text and "Running out" in c.get("/shopping").text
+    sid = q("SELECT id FROM shopping WHERE name='blueberries (secondary)'")[0][0]
+    c.post(f"/shopping/{sid}/toggle")
+    assert q("SELECT done FROM shopping WHERE id=?", sid)[0][0] == 1
+    assert c.post(f"/shopping/{sid}/bogus").status_code == 404

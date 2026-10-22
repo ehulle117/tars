@@ -18,13 +18,14 @@
 </div>
 <section class="scroll">
 <table>
-  <tr><th>Kind</th><th>Item</th><th>On hand</th><th>Unit</th><th>Unit cost $</th><th>Notes</th><th>Remove</th></tr>
+  <tr><th>Kind</th><th>Item</th><th>On hand</th><th>Unit</th><th>Unit cost $</th><th>Reorder at</th><th>Notes</th><th>Remove</th></tr>
   {% for i in items %}<tr>
     <td><select name="kind-{{ i.id }}">{% for k in kinds %}<option {{ "selected" if k == i.kind }}>{{ k }}</option>{% endfor %}</select></td>
     <td><input name="name-{{ i.id }}" value="{{ i.name }}" required size="18"></td>
     <td><input name="qty-{{ i.id }}" type="number" step="any" min="0" value="{{ i.qty|round(3) }}" required></td>
     <td><select name="unit-{{ i.id }}">{% for u in units %}<option {{ "selected" if u == i.unit }}>{{ u }}</option>{% endfor %}</select></td>
     <td><input name="unit_cost-{{ i.id }}" type="number" step="0.0001" min="0" value="{{ '%.4g'|format(i.unit_cost) if i.unit_cost is not none else '' }}"></td>
+    <td><input name="reorder_at-{{ i.id }}" type="number" step="any" min="0" value="{{ '%g'|format(i.reorder_at) if i.reorder_at is not none else '' }}" placeholder="—" aria-label="Reorder at"></td>
     <td><input name="notes-{{ i.id }}" value="{{ i.notes or '' }}" size="16"></td>
     <td><input type="checkbox" name="remove-{{ i.id }}" title="Remove {{ i.name }} on save"></td>
   </tr>{% endfor %}
@@ -38,11 +39,14 @@
 </div>
 
 {% set out = supplies|selectattr("qty", "le", 0.005)|list %}
+{% set low = [] %}{% for i in supplies %}{% if i.qty > 0.005 and i.reorder_at is not none and i.qty <= i.reorder_at %}{% set _ = low.append(i) %}{% endif %}{% endfor %}
 {% set unpriced = supplies|rejectattr("qty", "le", 0.005)|selectattr("unit_cost", "none")|list + supplies|rejectattr("qty", "le", 0.005)|selectattr("unit_cost", "eq", 0)|list %}
-{% if out or unpriced %}
+{% if out or unpriced or low %}
 <section class="attn" style="display:flex;flex-wrap:wrap;gap:.5rem 1.75rem;align-items:center">
   <h2 style="margin:0;font-size:1rem">Needs attention</h2>
   {% if out %}<span><b>{{ out|map(attribute="name")|join(", ") }}</b> {{ "is" if out|length == 1 else "are" }} out</span>{% endif %}
+  {% if low %}<span><b>{{ low|map(attribute="name")|join(", ") }}</b> {{ "is" if low|length == 1 else "are" }} running low</span>{% endif %}
+  <a href="/shopping" style="margin-left:auto">Shopping list</a>
   {% if unpriced %}<span><b>{{ unpriced|length }} item{{ "s" if unpriced|length != 1 }}</b> {{ "has" if unpriced|length == 1 else "have" }} no price: {{ unpriced|map(attribute="name")|join(", ") }}</span>{% endif %}
 </section>
 {% endif %}
@@ -63,10 +67,11 @@
   {% for i in group %}{% set gone = i.qty <= 0.005 %}
   <section class="inv-card{{ ' attn' if gone }}" data-name="{{ (i.name ~ ' ' ~ (i.notes or ''))|lower }}">
     <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:flex-start">
-      <b style="font-weight:600">{{ i.name }}</b>{% if gone %}<span class="pill warn">Out</span>{% endif %}
+      <b style="font-weight:600">{{ i.name }}</b>{% if gone %}<span class="pill warn">Out</span>{% elif i.reorder_at is not none and i.qty <= i.reorder_at %}<span class="pill warn">Low</span>{% endif %}
     </div>
     {% if i.notes %}<span class="muted small clip" title="{{ i.notes }}">{{ i.notes }}</span>{% endif %}
     <div style="font-size:1.6rem;font-weight:700;{{ 'color:var(--muted)' if gone }}">{{ "%g"|format(i.qty|round(2)) }} <span style="font-size:1rem;font-weight:500">{{ i.unit or "" }}</span></div>
+    {% if i.reorder_at is not none %}<div class="muted small">Reorder at {{ "%g"|format(i.reorder_at) }} {{ i.unit or "" }}</div>{% endif %}
     <div class="muted small">{% if i.unit_cost %}{{ "$%.2f"|format(i.unit_cost) }}/{{ i.unit or "each" }}{% if not gone %} · {{ "$%.2f"|format(i.qty * i.unit_cost) }}{% endif %}{% else %}<span class="hl" style="color:var(--warn)">No price yet: batches get charged $0</span>{% endif %}</div>
     <details style="margin-top:auto">
       <summary class="small">{{ "Restock" if gone else "Restock or correct" }}</summary>

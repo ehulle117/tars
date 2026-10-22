@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Shopping list · Mead Log{% endblock %}
+{% block body %}
+<h1 style="margin-bottom:.4rem">Shopping list</h1>
+<p class="muted" style="margin-top:0">Out-of-stock and low supplies show up on their own; add anything else below. When it arrives, restock it in <a href="/inventory">Inventory</a> with what you paid.</p>
+
+{% if suggest %}
+<section class="attn">
+  <h2 style="font-size:1rem">Running out</h2>
+  <div style="display:flex;flex-direction:column;gap:.4rem">
+  {% for i in suggest %}
+    <form method="post" action="/shopping" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;justify-content:space-between">
+      <span><b>{{ i.name }}</b> <span class="soft">· {{ "out" if i.qty <= 0.005 else ("%g"|format(i.qty|round(2)) ~ " " ~ (i.unit or "") ~ " left") }}{% if i.reorder_at is not none %}, reorder at {{ "%g"|format(i.reorder_at) }}{% endif %}</span></span>
+      <input type="hidden" name="name" value="{{ i.name }}"><input type="hidden" name="inventory_id" value="{{ i.id }}">
+      <button class="ghost">Add to list</button>
+    </form>
+  {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section>
+  <h2>To buy <span class="count">{{ open|length }}</span></h2>
+  {% for s in open %}
+  <div style="display:flex;gap:.75rem;align-items:center;padding:.55rem 0;border-top:1px solid var(--line)">
+    <form method="post" action="/shopping/{{ s.id }}/toggle"><button class="ghost" style="min-height:36px;padding:.2rem .6rem" aria-label="Got {{ s.name }}">✓</button></form>
+    <span style="flex:1;min-width:0"><b>{{ s.name }}</b>{% if s.qty %} <span class="soft">· {{ "%g"|format(s.qty) }} {{ s.unit or "" }}</span>{% endif %}
+      <span class="muted small" style="display:block">{% if s.batch_name %}for {{ s.batch_name }} · {% elif s.note %}{{ s.note }} · {% endif %}added {{ s.added_on }}{% if s.who %} by {{ s.who }}{% endif %}</span></span>
+    <form method="post" action="/shopping/{{ s.id }}/delete"><button class="link" title="Remove">✕</button></form>
+  </div>
+  {% else %}<p class="muted" style="margin:0">Nothing on the list.</p>{% endfor %}
+  <form class="row" method="post" action="/shopping">
+    <label>Item<input name="name" placeholder="Fermaid O" required></label>
+    <label>Qty<input name="qty" type="number" step="any" min="0"></label>
+    <label>Unit<select name="unit"><option value=""></option>{% for u in units %}<option>{{ u }}</option>{% endfor %}</select></label>
+    <label>Note<input name="note" placeholder="where to buy, brand…"></label>
+    <button>Add</button>
+  </form>
+</section>
+
+{% if got %}
+<details class="card"><summary>Got it ({{ got|length }})</summary>
+  {% for s in got %}<div style="display:flex;gap:.75rem;align-items:center;padding:.45rem 0;border-top:1px solid var(--line)" class="muted">
+    <form method="post" action="/shopping/{{ s.id }}/toggle"><button class="link" title="Put back on the list">↺</button></form>
+    <span style="flex:1;text-decoration:line-through">{{ s.name }}{% if s.qty %} · {{ "%g"|format(s.qty) }} {{ s.unit or "" }}{% endif %}</span>
+    <form method="post" action="/shopping/{{ s.id }}/delete"><button class="link" title="Remove">✕</button></form>
+  </div>{% endfor %}
+</details>
+{% endif %}
+{% endblock %}

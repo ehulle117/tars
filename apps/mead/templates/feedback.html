@@ -8,7 +8,7 @@
 <form method="post" action="/feedback">
   <input type="hidden" name="page" value="{{ page }}">
   <div class="grid2">
-    <label>Your name<input name="author" id="author" placeholder="Ethan, Gabe…" autocomplete="name"></label>
+    <label>Your name<input name="author" id="author" placeholder="Ethan, Gabe…" autocomplete="name" value="{{ request.cookies.get('who') or '' }}"></label>
     {% if page and page != "/feedback" %}<label>About<input value="{{ page }}" disabled></label>{% endif %}
   </div>
   <label style="margin-top:.5rem">Remark<textarea name="message" rows="3" required placeholder="What would make this better?"></textarea></label>
@@ -25,7 +25,7 @@
 <script>
   // remember who's typing on this device; harmless if storage is blocked
   const a = document.getElementById("author");
-  try { a.value = localStorage.getItem("mead-author") || ""; } catch (e) {}
+  try { a.value = a.value || localStorage.getItem("mead-author") || ""; } catch (e) {}
   a.form.addEventListener("submit", () => { try { localStorage.setItem("mead-author", a.value); } catch (e) {} });
 </script>
 {% endblock %}

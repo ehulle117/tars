@@ -114,11 +114,43 @@
   <section class="narrow">
     <h2>Timeline</h2>
     {% if s.timeline %}<div class="tl">
-      {% for t in s.timeline[:6] %}<span class="muted small">{{ t.on }}</span><span>{{ t.what }}{% if t.note %} <span class="muted">· {{ t.note }}</span>{% endif %}</span>{% endfor %}
+      {% for t in s.timeline[:6] %}<span class="muted small">{{ t.on }}</span><span>{{ t.what }}{% if t.note %} <span class="muted">· {{ t.note }}</span>{% endif %}{% if t.who %} <span class="muted">· {{ t.who }}</span>{% endif %}</span>{% endfor %}
     </div>{% if s.timeline|length > 6 %}<p class="small" style="margin:.5rem 0 0"><a href="#readings">Readings</a> and <a href="#log">Log</a> have the rest.</p>{% endif %}
     {% else %}<p class="muted">Nothing logged yet.</p>{% endif %}
   </section>
 </div>
+
+{% if plan %}
+<section id="plan">
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:baseline;justify-content:space-between">
+    <h2>From the shelf</h2>
+    <span class="muted small">What this batch takes, matched to inventory. Tick what you're using now.</span>
+  </div>
+  <form method="post" action="/batch/{{ b.id }}/use-many">
+  <div class="scroll"><table>
+    <tr><th>Use</th><th>Recipe says</th><th>From stock</th><th class="r">Qty</th><th>Unit</th><th>Status</th></tr>
+    {% for r in plan %}{% set n = loop.index %}{% set inv = r.inv %}<tr>
+      <td><input type="checkbox" name="use-{{ n }}" aria-label="Use {{ r.name }}" {{ "checked" if inv and not r.used and not r.later and r.enough }}></td>
+      <td class="wrap">{{ r.name }}{% if r.amount %} <span class="muted">· {{ "%g"|format(r.amount) }} {{ r.unit or "" }}</span>{% endif %}</td>
+      <td><select name="inv-{{ n }}" aria-label="Stock item for {{ r.name }}"><option value="">— not from stock —</option>
+        {% for i in stock_all %}<option value="{{ i.id }}" {{ "selected" if inv and i.id == inv.id }}>{{ i.name }} ({{ "%g"|format(i.qty|round(2)) }} {{ i.unit or "" }})</option>{% endfor %}</select></td>
+      <td class="r"><input name="qty-{{ n }}" type="number" step="any" min="0" value="{{ '%g'|format(r.need|round(2)) if r.need is not none else '' }}" placeholder="{{ 'weigh it' if inv and r.need is none else '' }}" aria-label="Quantity" style="width:6rem"></td>
+      <td><select name="unit-{{ n }}" aria-label="Unit"><option value="">{{ inv.unit if inv and inv.unit else "stock unit" }}</option>{% for u in units %}<option>{{ u }}</option>{% endfor %}</select></td>
+      <td class="wrap small">{% if not inv %}<span class="pill">not stocked</span>
+        {% elif r.used %}<span class="pill info">used {{ "%g"|format(r.used|round(2)) }} {{ inv.unit or "" }}</span>
+        {% elif r.need is none %}<span class="pill accent">weigh it · {{ "%g"|format(r.have|round(2)) }} {{ inv.unit or "" }} on hand</span>
+        {% elif r.enough %}<span class="pill info">enough · {{ "%g"|format(r.have|round(2)) }} on hand</span>
+        {% else %}<span class="pill warn">short · {{ "%g"|format(r.have|round(2)) }} of {{ "%g"|format(r.need|round(2)) }} {{ inv.unit or "" }}</span>{% endif %}
+        {% if r.later %}<span class="muted"> · added later</span>{% endif %}</td>
+    </tr>{% endfor %}
+  </table></div>
+  <div style="display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.75rem">
+    <button>Use selected from inventory</button>
+    <button class="ghost" formaction="/batch/{{ b.id }}/shortfalls">Add what's missing to the shopping list</button>
+  </div>
+  </form>
+</section>
+{% endif %}
 
 <section id="costs">
   <div style="display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:baseline;justify-content:space-between">
@@ -133,7 +165,7 @@
     <tr><th>Date</th><th>Item</th><th class="r">Amount</th><th>Note</th><th></th></tr>
     {% for e in s.expenses %}<tr>
       <td class="soft">{{ e.spent_on }}</td><td class="wrap">{{ e.item }}{% if e.inventory_id %} <span class="badge">from inventory</span>{% endif %}</td>
-      <td class="num r">{{ "$%.2f"|format(e.amount) }}</td><td class="wrap muted">{{ e.note or "" }}</td>
+      <td class="num r">{{ "$%.2f"|format(e.amount) }}</td><td class="wrap muted">{{ e.note or "" }}{% if e.who %}{{ " · " if e.note }}{{ e.who }}{% endif %}</td>
       <td><form class="inline" method="post" action="/batch/{{ b.id }}/expense/{{ e.id }}/delete"><button class="link" title="Remove{{ ' (returns it to inventory)' if e.inventory_id }}">✕</button></form></td>
     </tr>{% endfor %}
   </table></div>{% endif %}
@@ -159,12 +191,12 @@
 <section id="readings">
   <h2>Readings</h2>
   <div class="scroll"><table>
-    <tr><th>Date</th><th class="r">SG</th><th class="r">°F</th><th class="r">Corrected</th><th class="r">pH</th><th>Note</th><th></th></tr>
+    <tr><th>Date</th><th class="r">SG</th><th class="r">°F</th><th class="r">Corrected</th><th class="r">pH</th><th>Note</th><th>By</th><th></th></tr>
     {% for r in s.reads %}<tr>
       <td class="soft">{{ r.taken_on }}</td><td class="num r">{{ "%.3f"|format(r.sg) }}</td><td class="num r">{{ r.temp_f or "" }}</td>
-      <td class="num r">{{ "%.4f"|format(r.sg_c) }}</td><td class="num r">{{ r.ph or "" }}</td><td class="wrap muted">{{ r.note or "" }}</td>
+      <td class="num r">{{ "%.4f"|format(r.sg_c) }}</td><td class="num r">{{ r.ph or "" }}</td><td class="wrap muted">{{ r.note or "" }}</td><td class="muted">{{ r.who or "" }}</td>
       <td><form class="inline" method="post" action="/batch/{{ b.id }}/reading/{{ r.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
-    </tr>{% else %}<tr><td colspan="7" class="muted">No readings yet.</td></tr>{% endfor %}
+    </tr>{% else %}<tr><td colspan="8" class="muted">No readings yet.</td></tr>{% endfor %}
   </table></div>
   <form class="row" method="post" action="/batch/{{ b.id }}/reading">
     <label>Date<input name="taken_on" type="date" value="{{ today }}"></label>
@@ -213,11 +245,11 @@
 <section id="log">
   <h2>Log</h2>
   <div class="scroll"><table>
-    <tr><th>Date</th><th>Event</th><th>Note</th><th>Rating</th><th></th></tr>
+    <tr><th>Date</th><th>Event</th><th>Note</th><th>Rating</th><th>By</th><th></th></tr>
     {% for e in events %}<tr>
-      <td class="soft">{{ e.on_date }}</td><td>{{ e.kind }}</td><td class="wrap muted">{{ e.note or "" }}</td><td>{{ "★" * e.rating if e.rating else "" }}</td>
+      <td class="soft">{{ e.on_date }}</td><td>{{ e.kind }}</td><td class="wrap muted">{{ e.note or "" }}</td><td>{{ "★" * e.rating if e.rating else "" }}</td><td class="muted">{{ e.who or "" }}</td>
       <td><form class="inline" method="post" action="/batch/{{ b.id }}/event/{{ e.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
-    </tr>{% else %}<tr><td colspan="5" class="muted">Nothing logged yet.</td></tr>{% endfor %}
+    </tr>{% else %}<tr><td colspan="6" class="muted">Nothing logged yet.</td></tr>{% endfor %}
   </table></div>
   <form class="row" method="post" action="/batch/{{ b.id }}/event">
     <label>Date<input name="on_date" type="date" value="{{ today }}"></label>
