@@ -398,3 +398,61 @@ def test_photos_and_labels():
     assert f"/uploads/{row[1]}" not in c.get(f"/batch/{bid}/label").text
     c.post(f"/batch/{bid}/photo/{row[0]}/delete")
     assert not os.path.exists(os.path.join(main.UPLOADS, row[1]))
+
+
+def test_compare_and_export():
+    page = c.get("/compare").text
+    assert 'id="cmp"' in page and "Honey lb/gal" in page and "cellar-life" in page
+    batches = c.get("/export/batches.csv")
+    assert batches.headers["content-type"].startswith("text/csv") and "attachment" in batches.headers["content-disposition"]
+    lines = batches.text.splitlines()
+    assert lines[0].startswith("name,status,style") and any(l.startswith("cellar-life,bottled") for l in lines)
+    for w in ("readings", "costs", "payments", "inventory", "bottles"):
+        r = c.get(f"/export/{w}.csv")
+        assert r.status_code == 200 and r.text.splitlines()[0] == main.EXPORTS[w][0]
+    assert c.get("/export/secrets.csv").status_code == 404
+
+
+def test_ispindel():
+    from datetime import date, datetime, timedelta
+    bid = int(c.post("/batch", data={"name": "float-check"}).url.path.split("/")[-1])
+    c.post(f"/batch/{bid}", data={"name": "float-check", "status": "primary", "volume_gal": "1", "n_need": "low",
+                                  "nutrient_protocol": "recipe", "ispindel": "spindel1",
+                                  "start_date": (date.today() - timedelta(days=10)).isoformat()})
+    post = lambda **kw: c.post("/api/ispindel", json={"name": "spindel1", "ID": 123, "angle": 40.1, "temperature": 20,  # noqa: E731
+                                                     "temp_units": "C", "battery": 4.1, "gravity": 1.050, "RSSI": -60, **kw})
+    r = post().json()
+    assert r == {"ok": True, "batch": "float-check", "logged": True, "sg": 1.05}
+    assert post(gravity=1.049).json()["logged"] is False  # within the hour: device updated, no new reading
+    con = main.db()
+    rd = con.execute("SELECT sg, temp_f, note FROM reading WHERE batch_id=?", (bid,)).fetchall()
+    assert [tuple(x) for x in rd] == [(1.05, 68.0, "iSpindel")]
+    assert con.execute("SELECT gravity FROM device WHERE name='spindel1'").fetchone()[0] == 1.049
+    # Plato and an offset
+    c.post("/devices/spindel1", data={"offset": "-0.002"})
+    con.execute("UPDATE device SET last_logged=NULL WHERE name='spindel1'").connection.commit()
+    assert post(gravity=12.0, **{"gravity-unit": "P"}).json()["sg"] == round(main.plato_to_sg(12.0) - 0.002, 4)
+    assert c.post("/api/ispindel", json={"angle": 3}).status_code == 400
+    assert c.post("/api/ispindel", content=b"not json").status_code == 400
+    # an unassigned device is remembered but logs nothing
+    assert c.post("/api/ispindel", json={"name": "spare", "gravity": 1.0}).json()["logged"] is False
+    assert "spare" in c.get("/devices").text and "float-check" in c.get("/devices").text
+    # tracking: no re-check task for people while the device reports
+    s = main.stats(con, main.get_batch(con, bid))
+    assert s["next"] == main.TRACKING and s["auto"]
+    assert not [t for t in c.get("/api/tasks").json() if t["batch_id"] == bid]
+    # quiet device and low battery become tasks
+    con.execute("UPDATE device SET last_seen=?, battery=3.3 WHERE name='spindel1'",
+                ((datetime.now() - timedelta(hours=13)).isoformat(timespec="seconds"),)).connection.commit()
+    tasks = [t["task"] for t in c.get("/api/tasks").json() if t["batch_id"] == bid]
+    assert any("hasn't reported since" in t for t in tasks) and any("Charge iSpindel spindel1 (3.30 V)" in t for t in tasks)
+    assert "Charge iSpindel" in c.get("/").text
+    # 24 flat hourly points over 3 days count as stable without the week-long wait
+    con.execute("DELETE FROM reading WHERE batch_id=?", (bid,))
+    for i in range(30):
+        con.execute("INSERT INTO reading (batch_id, taken_on, sg, note) VALUES (?,?,?,?)",
+                    (bid, (date.today() - timedelta(days=i % 3)).isoformat(), 1.0101 + (i % 2) * 0.0005, "iSpindel"))
+    con.commit()
+    s = main.stats(con, main.get_batch(con, bid))
+    assert s["stable"] and s["next"].startswith("Stabilize") and s["device_reads"] == 30
+    assert sum(1 for t in s["timeline"] if t["what"].startswith("Reading")) == 1  # just the latest

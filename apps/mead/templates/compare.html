@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Compare · Mead Log{% endblock %}
+{% block head %}
+<style>
+  #cmp th { cursor: pointer; user-select: none; }
+  #cmp th[aria-sort="ascending"]::after { content: " ▲"; font-size: .7em; }
+  #cmp th[aria-sort="descending"]::after { content: " ▼"; font-size: .7em; }
+</style>
+{% endblock %}
+{% block body %}
+<h1 style="margin-bottom:.4rem">Compare batches</h1>
+<p class="muted" style="margin-top:0">Every batch side by side. Click a column to sort.</p>
+{% if styles|length > 1 %}<div id="styles" style="display:flex;gap:.35rem;flex-wrap:wrap;margin-bottom:.75rem">
+  <button type="button" class="pill accent" data-style="">All</button>
+  {% for st in styles %}<button type="button" class="pill" data-style="{{ st }}">{{ st|capitalize }}</button>{% endfor %}
+</div>{% endif %}
+<section class="scroll" style="padding:0">
+<table id="cmp">
+  <thead><tr>
+    <th style="padding-left:1.25rem">Batch</th><th>Style</th><th>Status</th><th class="r" data-num>Size</th><th>Yeast</th>
+    <th class="r" data-num>Honey lb/gal</th><th class="r" data-num>OG</th><th class="r" data-num>Final</th><th class="r" data-num>ABV</th>
+    <th class="r" data-num>Cost/bottle</th><th class="r" data-num style="padding-right:1.25rem">Rating</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}{% set b, s = r.b, r.s %}<tr data-style="{{ b.style or '' }}">
+    <td style="padding-left:1.25rem" data-v="{{ b.name|lower }}"><a href="/batch/{{ b.id }}">{{ b.name }}</a></td>
+    <td class="soft">{{ b.style or "" }}</td>
+    <td><span class="pill">{{ b.status }}</span></td>
+    <td class="r" data-v="{{ b.volume_gal or 0 }}">{{ b.volume_gal or "" }}{% if b.volume_gal %} gal{% endif %}</td>
+    <td class="soft">{{ b.yeast or "" }}</td>
+    <td class="r" data-v="{{ r.honey or 0 }}">{{ "%.2f"|format(r.honey) if r.honey else "—" }}</td>
+    <td class="r" data-v="{{ s.og or 0 }}">{{ "%.3f"|format(s.og) if s.og else "—" }}</td>
+    <td class="r" data-v="{{ s.cur or 0 }}">{{ "%.3f"|format(s.cur) if s.cur else "—" }}</td>
+    <td class="r" data-v="{{ s.abv if s.abv is defined else 0 }}">{{ "%.1f%%"|format(s.abv) if s.abv is defined else "—" }}</td>
+    <td class="r" data-v="{{ r.per_bottle or 0 }}">{% if r.per_bottle %}{{ "" if s.per_bottle is defined else "~" }}{{ "$%.2f"|format(r.per_bottle) }}{% else %}—{% endif %}</td>
+    <td class="r" data-v="{{ s.rating if s.rating is defined else 0 }}" style="padding-right:1.25rem;color:var(--accent)">{% if s.rating is defined %}{{ "★" * (s.rating|round|int) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+  </tr>{% else %}<tr><td colspan="11" class="muted" style="padding-left:1.25rem">No batches yet.</td></tr>{% endfor %}
+  </tbody>
+</table>
+</section>
+<p class="muted small">~ = estimated from volume (750 mL bottles) until "Bottles filled" is set. Honey counts honey ingredients only.</p>
+
+<section style="margin-top:1.5rem">
+  <h2>Export to a spreadsheet</h2>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem">
+    {% for w in ["batches", "readings", "costs", "payments", "inventory", "bottles"] %}<a class="btn ghost" href="/export/{{ w }}.csv" download>{{ w|capitalize }} (CSV)</a>{% endfor %}
+  </div>
+</section>
+
+<script>
+  // sort by a column (numbers by their value) and filter by style; nothing is saved
+  const table = document.getElementById("cmp"), body = table.tBodies[0];
+  table.querySelectorAll("th").forEach((th, i) => th.addEventListener("click", () => {
+    const asc = th.getAttribute("aria-sort") !== "ascending";
+    table.querySelectorAll("th").forEach(x => x.removeAttribute("aria-sort"));
+    th.setAttribute("aria-sort", asc ? "ascending" : "descending");
+    const val = tr => { const td = tr.cells[i]; const v = td.dataset.v ?? td.textContent.trim().toLowerCase();
+                        return th.hasAttribute("data-num") ? parseFloat(v) || 0 : v; };
+    [...body.rows].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * (asc ? 1 : -1)).forEach(r => body.appendChild(r));
+  }));
+  document.querySelectorAll("#styles button").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll("#styles button").forEach(x => x.classList.toggle("accent", x === b));
+    [...body.rows].forEach(r => r.hidden = !!b.dataset.style && r.dataset.style !== b.dataset.style);
+  }));
+</script>
+{% endblock %}

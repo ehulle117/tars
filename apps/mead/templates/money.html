@@ -103,6 +103,7 @@
   {% endfor %}
 </details>
 {% else %}<p class="muted">No payments yet.</p>{% endfor %}
+{% if rows %}<p class="small"><a href="/export/payments.csv" download>Download payments (CSV)</a></p>{% endif %}
 
 <script>
   // narrow the ledger to one person's payments; nothing is saved

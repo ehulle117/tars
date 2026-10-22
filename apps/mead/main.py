@@ -1,4 +1,6 @@
 """Mead log: FastAPI + stdlib sqlite3 + Jinja templates."""
+import csv
+import io
 import math
 import os
 import re
@@ -9,7 +11,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 import chem
@@ -29,6 +31,11 @@ UNITS = ["lb", "oz", "kg", "g", "gal", "l", "ml", "tsp", "tbsp", "each"]
 KIND_UNIT = {"honey": "lb", "fruit": "lb", "yeast": "each", "nutrient": "g", "acid": "g", "tannin": "g", "spice": "g",
              "oak": "oz", "stabilizer": "g", "packaging": "each", "equipment": "each", "cleaning": "oz", "other": "each"}
 BOTTLES_PER_GAL = 3785.41 / 750
+DEVICE_NOTE = "iSpindel"  # the note on readings the iSpindel logs
+TRACKING = "iSpindel is tracking gravity"  # next step while it does; nothing for people to do
+LOG_EVERY = timedelta(minutes=55)  # one logged reading an hour, however often it posts
+STALE = timedelta(hours=12)
+LOW_BATTERY = 3.5  # volts
 BOTTLE_KINDS = ["drank", "gave away", "broke"]
 PROTOCOLS = {"tosna": "TOSNA (Fermaid-O)", "recipe": "As recipe (no checklist)"}
 WIKI = "https://wiki.meadtools.com/en/"
@@ -69,6 +76,9 @@ CREATE TABLE IF NOT EXISTS bottle_out (
 CREATE TABLE IF NOT EXISTS photo (
   id INTEGER PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES batch ON DELETE CASCADE, file TEXT NOT NULL,
   caption TEXT, added_on TEXT NOT NULL, who TEXT, on_label INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS device (
+  name TEXT PRIMARY KEY, last_seen TEXT, last_logged TEXT, gravity REAL, temp_f REAL, battery REAL, angle REAL,
+  rssi INTEGER, interval INTEGER, offset REAL NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, author TEXT, page TEXT, message TEXT NOT NULL,
   done INTEGER NOT NULL DEFAULT 0);
@@ -77,7 +87,7 @@ CREATE TABLE IF NOT EXISTS feedback (
 
 ADDED_COLUMNS = [("batch", "bottles", "INTEGER"), ("reading", "who", "TEXT"), ("event", "who", "TEXT"),
                  ("expense", "who", "TEXT"), ("inventory", "reorder_at", "REAL"),
-                 ("batch", "ready_on", "TEXT")]
+                 ("batch", "ready_on", "TEXT"), ("batch", "ispindel", "TEXT")]
 
 
 def db():
@@ -214,6 +224,10 @@ def stats(con, b) -> dict:
     og = reads[0]["sg_c"] if reads else (est_og or b["target_og"])
     cur = reads[-1]["sg_c"] if len(reads) > 1 else None
     stable = chem.is_stable([(r["taken_on"], r["sg_c"]) for r in reads])
+    recent = [r["sg_c"] for r in reads if r["note"] == DEVICE_NOTE
+              and (date.today() - date.fromisoformat(r["taken_on"])).days <= 3]
+    if not stable and len(recent) >= 24 and max(recent) - min(recent) <= 0.001:
+        stable = True  # three days of hourly iSpindel points that agree beat waiting a week for two by hand
     exps = [dict(r) for r in con.execute("SELECT e.*, i.kind AS inv_kind FROM expense e LEFT JOIN inventory i "
                                           "ON i.id = e.inventory_id WHERE batch_id=? ORDER BY spent_on, e.id", (b["id"],))]
     cost = sum(e["amount"] for e in exps)
@@ -268,8 +282,10 @@ def stats(con, b) -> dict:
     s["stages"] = [{"name": st, "date": dates.get(st), "now": i == pos,
                     "done": i < pos or (st == "stabilized" and "stabilize" in kinds)} for i, st in enumerate(STAGES)]
     # newest first: readings and log entries together
+    device = [r for r in reads if r["note"] == DEVICE_NOTE]
+    s["device_reads"] = len(device)
     tl = [{"on": r["taken_on"], "what": f"Reading {r['sg']:.3f}" + (f" at {r['temp_f']:g}°F" if r["temp_f"] else ""),
-           "note": r["note"], "who": r["who"]} for r in reads]
+           "note": r["note"], "who": r["who"]} for r in reads if r["note"] != DEVICE_NOTE or r is device[-1]]
     tl += [{"on": d, "what": k.capitalize() + (" " + "★" * r if r else ""), "note": n, "who": w} for k, d, n, w, r in evs]
     tl += [{"on": o["on_date"], "what": f"{o['kind'].capitalize()} {o['qty']} bottle{'s' if o['qty'] != 1 else ''}"
             + (" " + "★" * o["rating"] if o["rating"] else ""), "note": o["note"], "who": o["who"]} for o in outs]
@@ -279,6 +295,9 @@ def stats(con, b) -> dict:
     s["state"], s["next"], s["next_link"], s["due"], s["done_kind"] = next_action(
         b, s, kinds, stabilized[-1] if stabilized else None)
     s["due_label"] = due_label(s["due"]) if s["next"] else None
+    s["auto"] = s["next"] == TRACKING
+    if s["auto"]:
+        s["due_label"] = "Automatic"
     return s
 
 
@@ -295,6 +314,8 @@ def next_action(b, s, kinds, stabilized_on=None):
         return "Fermenting", f"Nutrient dose {n + 1}: {d['g']} g Fermaid-O {d['when']}", None, due, "nutrient"
     if len(s["reads"]) < 2:
         return "Just pitched", "Take a gravity reading", None, today, None
+    if not s["stable"] and b["ispindel"] and s["reads"][-1]["note"] == DEVICE_NOTE:
+        return "Fermenting", TRACKING, None, None, None
     if not s["stable"]:
         recheck = date.fromisoformat(s["reads"][-1]["taken_on"]) + timedelta(days=7)
         return "Fermenting", f"Re-check gravity on {day(recheck)}", None, recheck, None
@@ -333,13 +354,16 @@ def index(request: Request):
         payments = con.execute("SELECT * FROM payment").fetchall()
         out = [(i["name"], "Out" if i["qty"] <= 0.005 else f"{i['qty']:g} {i['unit'] or ''} left") for i in low_stock(con)]
         shopping_open = con.execute("SELECT COUNT(*) FROM shopping WHERE done=0").fetchone()[0]
+        device_alerts = [(b, p) for b, _ in [bs for st in ("primary", "secondary", "aging") for bs in groups[st]]
+                         for p in device_problems(con, b)]
+        tracked = [b for st in ("primary", "secondary", "aging") for b, _ in groups[st] if b["ispindel"]]
         unpriced = con.execute("SELECT COUNT(*) FROM inventory WHERE kind IS NOT 'equipment' AND qty > 0.005 "
                                "AND (unit_cost IS NULL OR unit_cost = 0)").fetchone()[0]
         bottles = con.execute("SELECT COALESCE(SUM(qty), 0) FROM inventory WHERE kind='packaging' "
                               "AND lower(name) LIKE '%bottle%'").fetchone()[0]
         made = con.execute("SELECT SUM(bottles), SUM(volume_gal) FROM batch WHERE bottles > 0 "
                            "AND volume_gal > 0").fetchone()
-    upnext = sorted(((b, s) for g in groups.values() for b, s in g if s["next"]),
+    upnext = sorted(((b, s) for g in groups.values() for b, s in g if s["next"] and not s["auto"]),
                     key=lambda bs: bs[1]["due"] or date.max)
     active = [bs for st in ("primary", "secondary", "aging") for bs in groups[st]]
     per_gal = made[0] / made[1] if made[0] else BOTTLES_PER_GAL  # your own past yield, once there is one
@@ -349,7 +373,8 @@ def index(request: Request):
     return tpl.TemplateResponse(request, "index.html", {
         "groups": groups, "upnext": upnext, "active": active, "today": date.today(), "shelf": shelf,
         "settle": settle, "spent": sum(p["amount"] for p in payments if not p["paid_to"]),
-        "cellar": groups["bottled"] + groups["archived"], "planned": groups["planned"]})
+        "cellar": groups["bottled"] + groups["archived"], "planned": groups["planned"],
+        "device_alerts": device_alerts, "tracked": tracked})
 
 
 @app.get("/recipes")
@@ -384,8 +409,10 @@ def batch_view(request: Request, bid: int):
         events = con.execute("SELECT * FROM event WHERE batch_id=? ORDER BY on_date, id", (bid,)).fetchall()
         plan = plan_rows(con, b, s["ings"]) if b["status"] in ("planned", "primary") else []
         photos = con.execute("SELECT * FROM photo WHERE batch_id=? ORDER BY id DESC", (bid,)).fetchall()
+        device_names = [r[0] for r in con.execute("SELECT name FROM device ORDER BY name")]
         stock_all = con.execute("SELECT * FROM inventory WHERE kind IS NOT 'equipment' ORDER BY kind, name").fetchall()
     return tpl.TemplateResponse(request, "batch.html", {"plan": plan, "stock_all": stock_all, "photos": photos,
+        "device_names": device_names,
         "b": b, "s": s, "events": events, "statuses": STATUSES, "kinds": KINDS, "event_kinds": EVENTS, "units": UNITS,
         "stock": con.execute("SELECT * FROM inventory WHERE qty > 0.005 AND kind IS NOT 'equipment' "
                              "ORDER BY kind, name").fetchall(),
@@ -403,12 +430,13 @@ async def batch_update(bid: int, request: Request):
         get_batch(con, bid)
         con.execute("""UPDATE batch SET name=?, status=?, style=?, volume_gal=?, yeast=?, n_need=?,
                        nutrient_protocol=?, goferm=?, start_date=?, bottle_date=?, target_og=?, target_fg=?,
-                       target_fg_max=?, source_url=?, notes=?, bottles=?, ready_on=? WHERE id=?""",
+                       target_fg_max=?, source_url=?, notes=?, bottles=?, ready_on=?, ispindel=? WHERE id=?""",
                     (f["name"], f["status"], f.get("style"), num(f.get("volume_gal")), f.get("yeast"), f["n_need"],
                      f["nutrient_protocol"], 1 if f.get("goferm") else 0, f.get("start_date") or None,
                      f.get("bottle_date") or None, num(f.get("target_og")), num(f.get("target_fg")),
                      num(f.get("target_fg_max")), f.get("source_url") or None, f.get("notes"),
-                     int(num(f.get("bottles"))) if num(f.get("bottles")) else None, f.get("ready_on") or None, bid))
+                     int(num(f.get("bottles"))) if num(f.get("bottles")) else None, f.get("ready_on") or None,
+                     (f.get("ispindel") or "").strip() or None, bid))
     return back(f"/batch/{bid}")
 
 
@@ -929,6 +957,63 @@ async def set_who(request: Request):
     return r
 
 
+def honey_per_gal(ings, vol):
+    lb = sum(chem.to_lb(i["amount"], i["unit"]) or 0 for i in ings if i["kind"] == "honey")
+    return lb / vol if lb and vol else None
+
+
+@app.get("/compare")
+def compare(request: Request):
+    """Every batch side by side, to see what works."""
+    with db() as con:
+        rows = []
+        for b in con.execute("SELECT * FROM batch WHERE status != 'recipe' ORDER BY start_date DESC, id DESC"):
+            s = stats(con, b)
+            rows.append({"b": b, "s": s, "honey": honey_per_gal(s["ings"], b["volume_gal"]),
+                         "per_bottle": s.get("per_bottle", s.get("cost_bottle"))})
+    return tpl.TemplateResponse(request, "compare.html", {"rows": rows,
+                                                          "styles": sorted({r["b"]["style"] for r in rows if r["b"]["style"]})})
+
+
+EXPORTS = {  # name: (columns, query); batches is built from stats() instead
+    "readings": ("batch,date,sg,temp_f,ph,note,by", "SELECT b.name, r.taken_on, r.sg, r.temp_f, r.ph, r.note, r.who FROM reading r "
+                 "JOIN batch b ON b.id = r.batch_id ORDER BY b.name, r.taken_on"),
+    "costs": ("batch,date,item,amount,from_inventory,note,by", "SELECT b.name, e.spent_on, e.item, e.amount, e.inventory_id IS NOT NULL, "
+              "e.note, e.who FROM expense e JOIN batch b ON b.id = e.batch_id ORDER BY b.name, e.spent_on"),
+    "payments": ("date,paid_by,for,amount,paid_back_to,note,batch", "SELECT p.paid_on, p.paid_by, p.item, p.amount, p.paid_to, p.note, "
+                 "b.name FROM payment p LEFT JOIN batch b ON b.id = p.batch_id ORDER BY p.paid_on"),
+    "inventory": ("kind,item,on_hand,unit,unit_cost,value,reorder_at,notes", "SELECT kind, name, qty, unit, unit_cost, "
+                  "ROUND(qty * COALESCE(unit_cost, 0), 2), reorder_at, notes FROM inventory ORDER BY kind, name"),
+    "bottles": ("batch,date,bottles,what,rating,note,by", "SELECT b.name, o.on_date, o.qty, o.kind, o.rating, o.note, o.who "
+                "FROM bottle_out o JOIN batch b ON b.id = o.batch_id ORDER BY b.name, o.on_date"),
+}
+
+
+@app.get("/export/{what}.csv")
+def export(what: str):
+    """Spreadsheet-ready copies of the data."""
+    out = io.StringIO()
+    w = csv.writer(out)
+    with db() as con:
+        if what == "batches":
+            w.writerow("name,status,style,volume_gal,yeast,start,bottled,og,current,abv,cost,bottles,per_bottle,"
+                       "bottles_left,rating,ready_on".split(","))
+            for b in con.execute("SELECT * FROM batch WHERE status != 'recipe' ORDER BY start_date"):
+                s = stats(con, b)
+                r2 = lambda v, n=3: round(v, n) if v is not None else None  # noqa: E731
+                w.writerow([b["name"], b["status"], b["style"], b["volume_gal"], b["yeast"], b["start_date"],
+                            b["bottle_date"], r2(s["og"]), r2(s["cur"]), r2(s.get("abv"), 1), round(s["cost"], 2),
+                            b["bottles"], r2(s.get("per_bottle"), 2), s.get("left"), r2(s.get("rating"), 1), b["ready_on"]])
+        elif what in EXPORTS:
+            cols, sql = EXPORTS[what]
+            w.writerow(cols.split(","))
+            w.writerows(con.execute(sql).fetchall())
+        else:
+            raise HTTPException(404)
+    return Response(out.getvalue(), media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="mead-{what}-{date.today().isoformat()}.csv"'})
+
+
 @app.get("/feedback")
 def feedback(request: Request):
     with db() as con:
@@ -964,6 +1049,84 @@ def summary(b, s) -> dict:
             "last_sg": round(last["sg_c"], 3) if last else None, "last_date": last["taken_on"] if last else None}
 
 
+def plato_to_sg(p: float) -> float:
+    return 1 + p / (258.6 - (p / 258.2) * 227.1)
+
+
+def device_problems(con, b) -> list:
+    """What's wrong with the iSpindel assigned to an active batch, as task text (empty when it's fine)."""
+    if not b["ispindel"] or b["status"] not in ("primary", "secondary", "aging"):
+        return []
+    d = con.execute("SELECT * FROM device WHERE name=?", (b["ispindel"],)).fetchone()
+    if not d or not d["last_seen"]:
+        return [f"iSpindel {b['ispindel']} hasn't reported yet: check its WiFi and push settings"]
+    out = []
+    seen = datetime.fromisoformat(d["last_seen"])
+    if datetime.now() - seen > STALE:
+        out.append(f"iSpindel {b['ispindel']} hasn't reported since {day(seen.date())} {seen:%H:%M}: battery or WiFi?")
+    if d["battery"] is not None and d["battery"] < LOW_BATTERY:
+        out.append(f"Charge iSpindel {b['ispindel']} ({d['battery']:.2f} V)")
+    return out
+
+
+@app.post("/api/ispindel")
+async def ispindel(request: Request):
+    """Where an iSpindel / GravityMon posts (HTTP, iSpindel JSON format). Logs a reading for the active batch it's
+    assigned to, at most hourly, with the device's calibration offset applied."""
+    try:
+        body = await request.json()
+        name = str(body.get("name") or body.get("ID") or "").strip()[:40]
+        raw = float(body["gravity"])
+        temp = float(body["temperature"]) if body.get("temperature") is not None else None
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise HTTPException(400, "expected iSpindel JSON with name and gravity")
+    if not name:
+        raise HTTPException(400, "expected iSpindel JSON with name and gravity")
+    unit = str(body.get("gravity-unit") or body.get("gravity_unit") or "G").upper()
+    sg = plato_to_sg(raw) if unit.startswith("P") or raw > 1.5 else raw
+    tu = str(body.get("temp_units") or body.get("temp-units") or "C").upper()
+    temp_f = None if temp is None else temp if tu.startswith("F") else (temp - 273.15 if tu.startswith("K") else temp) * 9 / 5 + 32
+    num_or = lambda k: float(body[k]) if isinstance(body.get(k), (int, float)) else None  # noqa: E731
+    now = datetime.now()
+    with db() as con:
+        con.execute("INSERT INTO device (name) VALUES (?) ON CONFLICT(name) DO NOTHING", (name,))
+        d = con.execute("SELECT * FROM device WHERE name=?", (name,)).fetchone()
+        sg = round(sg + (d["offset"] or 0), 4)
+        con.execute("UPDATE device SET last_seen=?, gravity=?, temp_f=?, battery=?, angle=?, rssi=?, interval=? WHERE name=?",
+                    (now.isoformat(timespec="seconds"), sg, temp_f, num_or("battery"), num_or("angle"),
+                     num_or("RSSI"), num_or("interval"), name))
+        b = con.execute("SELECT * FROM batch WHERE ispindel=? AND status IN ('primary', 'secondary', 'aging') "
+                        "ORDER BY start_date DESC, id DESC", (name,)).fetchone()
+        due = not d["last_logged"] or now - datetime.fromisoformat(d["last_logged"]) >= LOG_EVERY
+        logged = bool(b) and due and 0.980 <= sg <= 1.200
+        if logged:
+            con.execute("INSERT INTO reading (batch_id, taken_on, sg, temp_f, note, who) VALUES (?,?,?,?,?,?)",
+                        (b["id"], now.date().isoformat(), sg, None if temp_f is None else round(temp_f, 1),
+                         DEVICE_NOTE, DEVICE_NOTE))
+            con.execute("UPDATE device SET last_logged=? WHERE name=?", (now.isoformat(timespec="seconds"), name))
+    return {"ok": True, "batch": b["name"] if b else None, "logged": logged, "sg": sg}
+
+
+@app.get("/devices")
+def devices(request: Request):
+    with db() as con:
+        rows = con.execute("SELECT d.*, b.id AS batch_id, b.name AS batch_name FROM device d LEFT JOIN batch b "
+                           "ON b.ispindel = d.name AND b.status IN ('primary', 'secondary', 'aging') ORDER BY d.name").fetchall()
+    return tpl.TemplateResponse(request, "devices.html", {"rows": rows, "now": datetime.now(), "stale": STALE,
+                                                          "low": LOW_BATTERY, "fromiso": datetime.fromisoformat})
+
+
+@app.post("/devices/{name}")
+async def device_update(name: str, request: Request):
+    f = await request.form()
+    with db() as con:
+        if f.get("remove"):
+            con.execute("DELETE FROM device WHERE name=?", (name,))
+        else:
+            con.execute("UPDATE device SET offset=? WHERE name=?", (num(f.get("offset")) or 0, name))
+    return back("/devices")
+
+
 @app.get("/api/tasks")
 def api_tasks():
     """Next action per active batch, for the Discord bot. `due` is false for a gravity re-check
@@ -972,7 +1135,9 @@ def api_tasks():
     with db() as con:
         for b in con.execute("SELECT * FROM batch WHERE status IN ('primary', 'secondary', 'aging') ORDER BY id"):
             s = stats(con, b)
-            if not s["next"]:
+            for problem in device_problems(con, b):
+                out.append({**summary(b, s), "task": problem, "link": None, "due": True})
+            if not s["next"] or s["auto"]:
                 continue
             t = summary(b, s)
             t["due"] = not (s["next"].startswith("Re-check gravity") and t["last_date"]

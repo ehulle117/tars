@@ -119,6 +119,14 @@
       {% if shelf.shopping %}<div class="line"><span class="soft">On the shopping list</span><a href="/shopping">{{ shelf.shopping }}</a></div>{% endif %}
       <a href="/inventory">Open inventory</a> · <a href="/shopping">Shopping list</a>
     </section>
+    {% if device_alerts or tracked %}
+    <section>
+      <h2>iSpindel</h2>
+      {% for b, p in device_alerts %}<div class="attn" style="border:1px solid var(--warn-line);border-radius:10px;padding:.45rem .7rem;margin-bottom:.4rem"><span class="hl">{{ p }}</span></div>{% endfor %}
+      {% for b in tracked %}<div class="line"><a href="/batch/{{ b.id }}">{{ b.name }}</a><span class="soft">{{ b.ispindel }}</span></div>{% endfor %}
+      <a href="/devices">Devices</a>
+    </section>
+    {% endif %}
     {% if settle or spent %}
     <section>
       <h2>Who paid</h2>

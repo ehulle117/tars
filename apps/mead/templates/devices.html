@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Devices · Mead Log{% endblock %}
+{% block body %}
+<h1 style="margin-bottom:.4rem">Devices</h1>
+<p class="muted" style="margin-top:0">iSpindels that have reported in. Put one in a batch by typing its name in that batch's <b>Details → iSpindel</b>.</p>
+
+{% if rows %}
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1rem">
+{% for d in rows %}{% set seen = fromiso(d.last_seen) if d.last_seen else none %}{% set stale = seen and (now - seen) > stale %}
+<section style="margin:0;display:flex;flex-direction:column;gap:.5rem">
+  <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:baseline">
+    <b style="font-size:1.1rem">{{ d.name }}</b>
+    {% if not seen %}<span class="pill warn">never seen</span>{% elif stale %}<span class="pill warn">quiet since {{ seen.strftime("%b %-d %H:%M") }}</span>{% else %}<span class="pill info">seen {{ seen.strftime("%H:%M") }}</span>{% endif %}
+  </div>
+  <div class="soft">{% if d.batch_name %}In <a href="/batch/{{ d.batch_id }}">{{ d.batch_name }}</a>{% else %}Not in an active batch{% endif %}</div>
+  <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.4rem">
+    <div><small class="muted">Gravity</small><br><b>{{ "%.4f"|format(d.gravity) if d.gravity else "—" }}</b></div>
+    <div><small class="muted">Temp</small><br><b>{{ "%.1f°F"|format(d.temp_f) if d.temp_f is not none else "—" }}</b></div>
+    <div><small class="muted">Battery</small><br><b {% if d.battery is not none and d.battery < low %}style="color:var(--warn)"{% endif %}>{{ "%.2f V"|format(d.battery) if d.battery is not none else "—" }}</b></div>
+    <div><small class="muted">WiFi</small><br><b>{{ "%d dBm"|format(d.rssi) if d.rssi is not none else "—" }}</b></div>
+  </div>
+  <form method="post" action="/devices/{{ d.name }}" class="row" style="margin-top:.25rem">
+    <label>Calibration offset (SG)<input name="offset" type="number" step="0.0001" value="{{ '%g'|format(d.offset or 0) }}" style="width:7rem"></label>
+    <button class="ghost">Save</button>
+    <button class="link" name="remove" value="1" onclick="return confirm('Forget {{ d.name|e }}?')">Forget</button>
+  </form>
+  <p class="muted small" style="margin:0">If it reads 1.012 when your hydrometer says 1.010, set −0.002. Gravity above already includes the offset.</p>
+</section>
+{% endfor %}
+</div>
+{% else %}<section><p style="margin:0">No iSpindel has reported yet.</p></section>{% endif %}
+
+<section style="margin-top:1.5rem">
+  <h2>Setting one up</h2>
+  <ol style="margin:0;padding-left:1.2rem;display:flex;flex-direction:column;gap:.35rem">
+    <li>Flash <a href="https://github.com/mp-se/gravitymon" target="_blank" rel="noopener">GravityMon</a> (or use the stock iSpindel firmware) and join your WiFi.</li>
+    <li>Calibrate it against your hydrometer in water and a sugar solution, as its docs describe, with gravity in <b>SG</b>.</li>
+    <li>Under push targets, add <b>HTTP POST</b> to <code>{{ request.base_url }}api/ispindel</code> with the <b>iSpindel</b> format. On your home WiFi, <code>http://192.168.8.103:8770/api/ispindel</code> works too.</li>
+    <li>Set the interval to 900 seconds (15 minutes) for a good battery life.</li>
+    <li>Once it shows up here, type its name into the batch's <b>Details → iSpindel</b>.</li>
+  </ol>
+</section>
+{% endblock %}
