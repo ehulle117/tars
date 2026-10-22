@@ -354,3 +354,47 @@ def test_plan_from_shelf_shopping_and_reorder():
     c.post(f"/shopping/{sid}/toggle")
     assert q("SELECT done FROM shopping WHERE id=?", sid)[0][0] == 1
     assert c.post(f"/shopping/{sid}/bogus").status_code == 404
+
+
+def test_bottles_tastings_ready():
+    from datetime import date, timedelta
+    bid = int(c.post("/batch", data={"name": "cellar-life"}).url.path.split("/")[-1])
+    soon = (date.today() + timedelta(days=60)).isoformat()
+    c.post(f"/batch/{bid}", data={"name": "cellar-life", "status": "bottled", "volume_gal": "1", "n_need": "low",
+                                  "nutrient_protocol": "recipe", "bottles": "5", "ready_on": soon})
+    c.post(f"/batch/{bid}/bottle", data={"qty": "1", "kind": "drank", "rating": "4", "note": "a bit hot"})
+    c.post(f"/batch/{bid}/bottle", data={"qty": "2", "kind": "gave away"})
+    c.post(f"/batch/{bid}/event", data={"kind": "tasting", "rating": "2"})
+    s = main.stats(main.db(), main.get_batch(main.db(), bid))
+    assert s["left"] == 2 and s["rating"] == 3 and s["ready"].startswith("Ready ") and s["ready"] != "Ready now"
+    assert c.post(f"/batch/{bid}/bottle", data={"qty": "3", "kind": "drank"}).status_code == 400  # only 2 left
+    assert c.post(f"/batch/{bid}/bottle", data={"qty": "1", "kind": "spilled"}).status_code == 400
+    page = c.get(f"/batch/{bid}").text
+    assert "2</b> of 5 bottles left" in page and "Drank 1 bottle ★★★★" in page
+    home = c.get("/").text
+    assert "2<span class=\"muted\">/5</span>" in home
+    oid = main.db().execute("SELECT id FROM bottle_out WHERE batch_id=? AND kind='gave away'", (bid,)).fetchone()[0]
+    c.post(f"/batch/{bid}/bottle_out/{oid}/delete")
+    assert main.stats(main.db(), main.get_batch(main.db(), bid))["left"] == 4
+
+
+def test_photos_and_labels():
+    import io
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    bid = int(c.post("/batch", data={"name": "photo-check"}).url.path.split("/")[-1])
+    r = c.post(f"/batch/{bid}/photo", data={"caption": "racked", "on_label": "on"},
+               files={"photo": ("p.png", io.BytesIO(png), "image/png")})
+    assert r.status_code == 200
+    row = main.db().execute("SELECT id, file, on_label FROM photo WHERE batch_id=?", (bid,)).fetchone()
+    assert row[2] == 1 and os.path.exists(os.path.join(main.UPLOADS, row[1]))
+    assert c.get(f"/uploads/{row[1]}").content == png
+    assert c.get("/uploads/../mead.db").status_code == 404 and c.get("/uploads/nope.png").status_code == 404
+    fake = c.post(f"/batch/{bid}/photo", files={"photo": ("x.png", io.BytesIO(b"<script>"), "image/png")})
+    assert fake.status_code == 400  # bytes aren't an image
+    assert c.post(f"/batch/{bid}/photo", files={"photo": ("x.svg", io.BytesIO(b"<svg/>"), "image/svg+xml")}).status_code == 400
+    label = c.get(f"/batch/{bid}/label?size=wine&count=3&line=Patience").text
+    assert label.count('class="label"') == 3 and f"/uploads/{row[1]}" in label and "Patience" in label
+    c.post(f"/batch/{bid}/photo/{row[0]}/label")  # toggle off -> text-only labels
+    assert f"/uploads/{row[1]}" not in c.get(f"/batch/{bid}/label").text
+    c.post(f"/batch/{bid}/photo/{row[0]}/delete")
+    assert not os.path.exists(os.path.join(main.UPLOADS, row[1]))

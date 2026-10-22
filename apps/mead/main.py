@@ -3,18 +3,22 @@ import math
 import os
 import re
 import sqlite3
+import uuid
 from datetime import date, datetime, timedelta
 from typing import Optional
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 import chem
 import seed
 
 DB = os.environ.get("MEAD_DB", "mead.db")
+UPLOADS = os.path.join(os.path.dirname(os.path.abspath(DB)), "uploads")  # beside the database: same volume, same backup
+IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
+MAX_UPLOAD = 10 * 1024 * 1024
 STATUSES = ["planned", "primary", "secondary", "aging", "bottled", "archived", "recipe"]
 KINDS = ["honey", "fruit", "water", "nutrient", "acid", "tannin", "spice", "oak", "stabilizer", "other"]
 EVENTS = ["pitch", "nutrient", "degas", "rack", "stabilize", "backsweeten", "bottle", "tasting", "note"]
@@ -25,6 +29,7 @@ UNITS = ["lb", "oz", "kg", "g", "gal", "l", "ml", "tsp", "tbsp", "each"]
 KIND_UNIT = {"honey": "lb", "fruit": "lb", "yeast": "each", "nutrient": "g", "acid": "g", "tannin": "g", "spice": "g",
              "oak": "oz", "stabilizer": "g", "packaging": "each", "equipment": "each", "cleaning": "oz", "other": "each"}
 BOTTLES_PER_GAL = 3785.41 / 750
+BOTTLE_KINDS = ["drank", "gave away", "broke"]
 PROTOCOLS = {"tosna": "TOSNA (Fermaid-O)", "recipe": "As recipe (no checklist)"}
 WIKI = "https://wiki.meadtools.com/en/"
 
@@ -58,6 +63,12 @@ CREATE TABLE IF NOT EXISTS shopping (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, qty REAL, unit TEXT, note TEXT, added_on TEXT NOT NULL, who TEXT,
   done INTEGER NOT NULL DEFAULT 0, inventory_id INTEGER REFERENCES inventory ON DELETE SET NULL,
   batch_id INTEGER REFERENCES batch ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS bottle_out (
+  id INTEGER PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES batch ON DELETE CASCADE, on_date TEXT NOT NULL,
+  qty INTEGER NOT NULL DEFAULT 1, kind TEXT, rating INTEGER, note TEXT, who TEXT);
+CREATE TABLE IF NOT EXISTS photo (
+  id INTEGER PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES batch ON DELETE CASCADE, file TEXT NOT NULL,
+  caption TEXT, added_on TEXT NOT NULL, who TEXT, on_label INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, author TEXT, page TEXT, message TEXT NOT NULL,
   done INTEGER NOT NULL DEFAULT 0);
@@ -65,7 +76,8 @@ CREATE TABLE IF NOT EXISTS feedback (
 
 
 ADDED_COLUMNS = [("batch", "bottles", "INTEGER"), ("reading", "who", "TEXT"), ("event", "who", "TEXT"),
-                 ("expense", "who", "TEXT"), ("inventory", "reorder_at", "REAL")]
+                 ("expense", "who", "TEXT"), ("inventory", "reorder_at", "REAL"),
+                 ("batch", "ready_on", "TEXT")]
 
 
 def db():
@@ -81,6 +93,7 @@ with db() as _c:
         if col not in [r[1] for r in _c.execute(f"PRAGMA table_info({table})")]:
             _c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
     seed.run(_c)
+os.makedirs(UPLOADS, exist_ok=True)
 
 app = FastAPI()
 tpl = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
@@ -193,7 +206,8 @@ def stats(con, b) -> dict:
     reads = [dict(r) for r in con.execute("SELECT * FROM reading WHERE batch_id=? ORDER BY taken_on, id", (b["id"],))]
     for r in reads:
         r["sg_c"] = chem.temp_correct(r["sg"], r["temp_f"]) if r["temp_f"] else r["sg"]
-    evs = con.execute("SELECT kind, on_date, note, who FROM event WHERE batch_id=? ORDER BY on_date, id", (b["id"],)).fetchall()
+    evs = con.execute("SELECT kind, on_date, note, who, rating FROM event WHERE batch_id=? ORDER BY on_date, id",
+                      (b["id"],)).fetchall()
     kinds = [e[0] for e in evs]
     stabilized = [e[1] for e in evs if e[0] == "stabilize"]
     est_og = chem.estimate_og(ings, b["volume_gal"] or 0)
@@ -229,13 +243,24 @@ def stats(con, b) -> dict:
     if cost and b["bottles"]:
         s["per_bottle"] = cost / b["bottles"]  # actual bottles filled beats the 750 mL estimate
     s["spark"] = spark([(r["taken_on"], r["sg_c"]) for r in reads])
+    outs = [dict(r) for r in con.execute("SELECT * FROM bottle_out WHERE batch_id=? ORDER BY on_date DESC, id DESC",
+                                         (b["id"],))]
+    s["outs"] = outs
+    if b["bottles"]:
+        s["left"] = max(b["bottles"] - sum(o["qty"] for o in outs), 0)
+    rated = [o["rating"] for o in outs if o["rating"]] + [r for k, _, _, _, r in evs if k == "tasting" and r]
+    if rated:
+        s["rating"] = sum(rated) / len(rated)
+    if b["ready_on"]:
+        ready = date.fromisoformat(b["ready_on"])
+        s["ready"] = "Ready now" if ready <= date.today() else f"Ready {day(ready)}"
     groups = {}
     for e in exps:
         groups[cost_group(e)] = groups.get(cost_group(e), 0) + e["amount"]
     s["cost_parts"] = [(g, groups[g]) for g in COST_GROUPS if groups.get(g)]
     # the brewing stages, ticked off from status and the log
     first = {}
-    for k, d, _, _ in evs:
+    for k, d, _, _, _ in evs:
         first.setdefault(k, d)
     pos = STAGE_POS.get(b["status"], 0)
     dates = {"primary": b["start_date"], "secondary": first.get("rack"), "stabilized": first.get("stabilize"),
@@ -245,7 +270,9 @@ def stats(con, b) -> dict:
     # newest first: readings and log entries together
     tl = [{"on": r["taken_on"], "what": f"Reading {r['sg']:.3f}" + (f" at {r['temp_f']:g}°F" if r["temp_f"] else ""),
            "note": r["note"], "who": r["who"]} for r in reads]
-    tl += [{"on": d, "what": k.capitalize(), "note": n, "who": w} for k, d, n, w in evs]
+    tl += [{"on": d, "what": k.capitalize() + (" " + "★" * r if r else ""), "note": n, "who": w} for k, d, n, w, r in evs]
+    tl += [{"on": o["on_date"], "what": f"{o['kind'].capitalize()} {o['qty']} bottle{'s' if o['qty'] != 1 else ''}"
+            + (" " + "★" * o["rating"] if o["rating"] else ""), "note": o["note"], "who": o["who"]} for o in outs]
     s["timeline"] = sorted(tl, key=lambda t: t["on"], reverse=True)
     if b["start_date"]:
         s["days"] = (date.today() - date.fromisoformat(b["start_date"])).days
@@ -356,12 +383,14 @@ def batch_view(request: Request, bid: int):
         s = stats(con, b)
         events = con.execute("SELECT * FROM event WHERE batch_id=? ORDER BY on_date, id", (bid,)).fetchall()
         plan = plan_rows(con, b, s["ings"]) if b["status"] in ("planned", "primary") else []
+        photos = con.execute("SELECT * FROM photo WHERE batch_id=? ORDER BY id DESC", (bid,)).fetchall()
         stock_all = con.execute("SELECT * FROM inventory WHERE kind IS NOT 'equipment' ORDER BY kind, name").fetchall()
-    return tpl.TemplateResponse(request, "batch.html", {"plan": plan, "stock_all": stock_all,
+    return tpl.TemplateResponse(request, "batch.html", {"plan": plan, "stock_all": stock_all, "photos": photos,
         "b": b, "s": s, "events": events, "statuses": STATUSES, "kinds": KINDS, "event_kinds": EVENTS, "units": UNITS,
         "stock": con.execute("SELECT * FROM inventory WHERE qty > 0.005 AND kind IS NOT 'equipment' "
                              "ORDER BY kind, name").fetchall(),
-        "n_needs": list(chem.N_FACTOR), "protocols": PROTOCOLS, "today": date.today().isoformat()})
+        "n_needs": list(chem.N_FACTOR), "protocols": PROTOCOLS, "today": date.today().isoformat(),
+        "bottle_kinds": BOTTLE_KINDS})
 
 
 @app.post("/batch/{bid}")
@@ -374,12 +403,12 @@ async def batch_update(bid: int, request: Request):
         get_batch(con, bid)
         con.execute("""UPDATE batch SET name=?, status=?, style=?, volume_gal=?, yeast=?, n_need=?,
                        nutrient_protocol=?, goferm=?, start_date=?, bottle_date=?, target_og=?, target_fg=?,
-                       target_fg_max=?, source_url=?, notes=?, bottles=? WHERE id=?""",
+                       target_fg_max=?, source_url=?, notes=?, bottles=?, ready_on=? WHERE id=?""",
                     (f["name"], f["status"], f.get("style"), num(f.get("volume_gal")), f.get("yeast"), f["n_need"],
                      f["nutrient_protocol"], 1 if f.get("goferm") else 0, f.get("start_date") or None,
                      f.get("bottle_date") or None, num(f.get("target_og")), num(f.get("target_fg")),
                      num(f.get("target_fg_max")), f.get("source_url") or None, f.get("notes"),
-                     int(num(f.get("bottles"))) if num(f.get("bottles")) else None, bid))
+                     int(num(f.get("bottles"))) if num(f.get("bottles")) else None, f.get("ready_on") or None, bid))
     return back(f"/batch/{bid}")
 
 
@@ -654,11 +683,104 @@ def shopping_change(sid: int, action: str):
     return back("/shopping")
 
 
+@app.post("/batch/{bid}/bottle")
+async def open_bottle(bid: int, request: Request):
+    """Bottles leaving the cellar (drunk, given away, broken), with an optional rating and tasting note."""
+    f = await request.form()
+    qty, rating = num(f.get("qty")) or 1, num(f.get("rating"))
+    if f.get("kind") not in BOTTLE_KINDS or qty < 1 or qty != int(qty) or (rating is not None and not 1 <= rating <= 5):
+        raise HTTPException(400, "a whole number of bottles, drank / gave away / broke, rating 1-5")
+    with db() as con:
+        b = get_batch(con, bid)
+        if b["bottles"]:
+            gone = con.execute("SELECT COALESCE(SUM(qty), 0) FROM bottle_out WHERE batch_id=?", (bid,)).fetchone()[0]
+            if gone + qty > b["bottles"]:
+                raise HTTPException(400, f"only {b['bottles'] - gone} bottle(s) left")
+        con.execute("INSERT INTO bottle_out (batch_id, on_date, qty, kind, rating, note, who) VALUES (?,?,?,?,?,?,?)",
+                    (bid, f.get("on_date") or date.today().isoformat(), int(qty), f["kind"],
+                     None if rating is None else int(rating), f.get("note") or None, who(request)))
+    return back(f"/batch/{bid}#cellar")
+
+
+def looks_like_image(data: bytes) -> bool:
+    """Trust the bytes, not the browser's say-so."""
+    return (data[:8] == b"\x89PNG\r\n\x1a\n" or data[:3] == b"\xff\xd8\xff" or data[:6] in (b"GIF87a", b"GIF89a")
+            or (data[:4] == b"RIFF" and data[8:12] == b"WEBP"))
+
+
+@app.post("/batch/{bid}/photo")
+async def add_photo(bid: int, request: Request):
+    f = await request.form()
+    up = f.get("photo")
+    if not hasattr(up, "read") or up.content_type not in IMAGE_TYPES:
+        raise HTTPException(400, "pick a JPEG, PNG, WebP or GIF image")
+    data = await up.read(MAX_UPLOAD + 1)
+    if len(data) > MAX_UPLOAD or not looks_like_image(data):
+        raise HTTPException(400, "images must be real JPEG/PNG/WebP/GIF files under 10 MB")
+    name = f"{uuid.uuid4().hex}.{IMAGE_TYPES[up.content_type]}"
+    with db() as con:
+        get_batch(con, bid)
+        with open(os.path.join(UPLOADS, name), "wb") as out:
+            out.write(data)
+        label = 1 if f.get("on_label") else 0
+        if label:
+            con.execute("UPDATE photo SET on_label=0 WHERE batch_id=?", (bid,))
+        con.execute("INSERT INTO photo (batch_id, file, caption, added_on, who, on_label) VALUES (?,?,?,?,?,?)",
+                    (bid, name, (f.get("caption") or "").strip() or None, date.today().isoformat(), who(request), label))
+    return back(f"/batch/{bid}#photos")
+
+
+@app.post("/batch/{bid}/photo/{pid}/label")
+def photo_label(bid: int, pid: int):
+    """Use this photo on the batch's labels (only one at a time); again to stop using it."""
+    with db() as con:
+        cur = con.execute("SELECT on_label FROM photo WHERE id=? AND batch_id=?", (pid, bid)).fetchone()
+        if not cur:
+            raise HTTPException(404)
+        con.execute("UPDATE photo SET on_label=0 WHERE batch_id=?", (bid,))
+        if not cur[0]:
+            con.execute("UPDATE photo SET on_label=1 WHERE id=?", (pid,))
+    return back(f"/batch/{bid}#photos")
+
+
+@app.get("/uploads/{name}")
+def upload_file(name: str):
+    if not re.fullmatch(r"[0-9a-f]{32}\.(jpg|png|webp|gif)", name) or not os.path.exists(os.path.join(UPLOADS, name)):
+        raise HTTPException(404)
+    return FileResponse(os.path.join(UPLOADS, name), headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+LABEL_SIZES = {"small": ("3in", "2in", "Small · 3 × 2 in"), "wine": ("3.5in", "4in", "Wine · 3.5 × 4 in")}
+
+
+@app.get("/batch/{bid}/label")
+def label_sheet(request: Request, bid: int):
+    """A printable sheet of bottle labels, cut along the dashed lines."""
+    q = request.query_params
+    with db() as con:
+        b = get_batch(con, bid)
+        s = stats(con, b)
+        photo = con.execute("SELECT * FROM photo WHERE batch_id=? ORDER BY on_label DESC, id DESC LIMIT 1",
+                            (bid,)).fetchone()
+        labeled = con.execute("SELECT COUNT(*) FROM photo WHERE batch_id=? AND on_label=1", (bid,)).fetchone()[0]
+    size = q.get("size") if q.get("size") in LABEL_SIZES else "small"
+    count = int(num(q.get("count")) or s.get("left") or b["bottles"] or 8)
+    names = [p for p in payers()]
+    return tpl.TemplateResponse(request, "label.html", {
+        "b": b, "s": s, "photo": photo if labeled or q.get("image") == "any" else None, "has_photo": bool(photo),
+        "size": size, "sizes": LABEL_SIZES, "count": max(1, min(count, 60)), "line": q.get("line", ""),
+        "by": q.get("by", ("Brewed by " + " & ".join(names)) if names else "")})
+
+
 @app.post("/batch/{bid}/{table}/{rid}/delete")
 def delete_row(bid: int, table: str, rid: int):
-    if table not in ("ingredient", "reading", "event", "expense"):  # whitelist: table name is interpolated
+    if table not in ("ingredient", "reading", "event", "expense", "bottle_out", "photo"):  # whitelisted: interpolated
         raise HTTPException(404)
     with db() as con:
+        if table == "photo":  # the file goes too
+            row = con.execute("SELECT file FROM photo WHERE id=? AND batch_id=?", (rid, bid)).fetchone()
+            if row and os.path.exists(os.path.join(UPLOADS, row[0])):
+                os.remove(os.path.join(UPLOADS, row[0]))
         if table == "expense":  # undoing a "use from inventory" puts the stock back
             con.execute("""UPDATE inventory SET qty = qty + (SELECT qty FROM expense WHERE id=? AND batch_id=?)
                            WHERE id = (SELECT inventory_id FROM expense WHERE id=? AND batch_id=?)""", (rid, bid, rid, bid))

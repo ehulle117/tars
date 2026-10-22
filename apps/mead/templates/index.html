@@ -88,12 +88,14 @@
     <h2>In the cellar <span class="count">{{ cellar|length }}</span></h2>
     <section class="scroll" style="padding:0">
       <table>
-        <tr><th style="padding-left:1.25rem">Batch</th><th>Bottled</th><th class="r">ABV</th><th class="r">Bottles</th><th class="r" style="padding-right:1.25rem">Per bottle</th></tr>
+        <tr><th style="padding-left:1.25rem">Batch</th><th>Bottled</th><th class="r">ABV</th><th class="r">Left</th><th>Ready</th><th>Rating</th><th class="r" style="padding-right:1.25rem">Per bottle</th></tr>
         {% for b, s in cellar %}<tr{% if b.status == "archived" %} class="muted"{% endif %}>
           <td style="padding-left:1.25rem"><a href="/batch/{{ b.id }}"{% if b.status == "archived" %} style="color:var(--muted)"{% endif %}>{{ b.name }}</a></td>
           <td class="soft">{% if b.status == "archived" %}Archived{% elif b.bottle_date %}{{ b.bottle_date }}{% endif %}</td>
           <td class="r">{{ "%.1f%%"|format(s.abv) if s.abv is defined else "—" }}</td>
-          <td class="r">{{ b.bottles or "—" }}</td>
+          <td class="r">{% if s.left is defined %}{{ s.left }}<span class="muted">/{{ b.bottles }}</span>{% else %}—{% endif %}</td>
+          <td>{% if s.ready %}<span class="pill {{ 'info' if s.ready == 'Ready now' else '' }}">{{ s.ready }}</span>{% endif %}</td>
+          <td style="color:var(--accent)">{% if s.rating is defined %}{{ "★" * (s.rating|round|int) }}{% endif %}</td>
           <td class="r" style="padding-right:1.25rem">{% if b.status == "archived" %}—{% elif s.per_bottle is defined %}{{ "$%.2f"|format(s.per_bottle) }}{% elif s.cost_bottle is defined %}~{{ "$%.2f"|format(s.cost_bottle) }}{% else %}—{% endif %}</td>
         </tr>{% endfor %}
       </table>

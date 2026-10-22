@@ -30,6 +30,9 @@
   .legend { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; font-size: .9rem; }
   .legend i { display: inline-block; width: .7rem; height: .7rem; border-radius: 3px; margin-right: .35rem; vertical-align: -1px; }
   section h2 { margin-top: 0; }
+  .photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .9rem; }
+  .photos figure { margin: 0; display: flex; flex-direction: column; gap: .35rem; }
+  .photos img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); display: block; }
   @media (max-width: 720px) { .stepper { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 </style>
 {% endblock %}
@@ -56,6 +59,7 @@
       <div class="items">
         {% if b.status != "recipe" %}<form method="post" action="/batch/{{ b.id }}/clone"><button class="ghost">Clone as new batch</button></form>
         <form method="post" action="/batch/{{ b.id }}/save-recipe"><button class="ghost">Save as recipe</button></form>
+        <a class="btn ghost" href="/batch/{{ b.id }}/label">Print labels</a>
         <a class="btn ghost" href="/calc{% if s.cur and b.volume_gal %}?b_cur={{ '%.3f'|format(s.cur) }}&b_vol={{ b.volume_gal }}&s_vol={{ b.volume_gal }}&ph={{ ph }}&abv={{ '%.1f'|format(s.abv) }}{% endif %}">Stabilize / backsweeten math</a>{% endif %}
         <form method="post" action="/batch/{{ b.id }}/delete" onsubmit="return confirm('Delete {{ b.name|e }} and all its readings?')"><button class="danger">Delete {{ "recipe" if b.status == "recipe" else "batch" }}</button></form>
       </div>
@@ -102,8 +106,37 @@
 
 <nav class="secnav" aria-label="Batch sections">
   <a href="#overview">Overview</a><a href="#readings">Readings {{ s.reads|length }}</a><a href="#costs">Costs {{ s.expenses|length }}</a>
-  <a href="#ingredients">Ingredients {{ s.ings|length }}</a>{% if s.tosna %}<a href="#nutrients">Nutrients</a>{% endif %}<a href="#log">Log {{ events|length }}</a><a href="#details" onclick="document.getElementById('details').open = true">Details</a>
+  <a href="#ingredients">Ingredients {{ s.ings|length }}</a>{% if s.tosna %}<a href="#nutrients">Nutrients</a>{% endif %}<a href="#log">Log {{ events|length }}</a><a href="#photos">Photos {{ photos|length }}</a><a href="#details" onclick="document.getElementById('details').open = true">Details</a>
 </nav>
+
+{% if b.bottles or b.status in ("bottled", "archived") %}
+<section id="cellar">
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:baseline;justify-content:space-between">
+    <h2>Cellar</h2>
+    <span class="soft">{% if s.left is defined %}<b style="color:var(--fg);font-size:1.2rem">{{ s.left }}</b> of {{ b.bottles }} bottles left{% else %}Set "Bottles filled" in Details to count down{% endif %}
+      {% if s.rating is defined %} · <span style="color:var(--accent)">{{ "★" * (s.rating|round|int) }}</span> {{ "%.1f"|format(s.rating) }} avg{% endif %}
+      {% if s.ready %} · <span class="pill {{ 'info' if s.ready == 'Ready now' else 'accent' }}">{{ s.ready }}</span>{% elif b.status == "bottled" %} · <a href="#details" onclick="document.getElementById('details').open = true">set a ready-from date</a>{% endif %}</span>
+  </div>
+  {% if s.left is not defined or s.left > 0 %}
+  <form class="row" method="post" action="/batch/{{ b.id }}/bottle" style="margin-top:.5rem">
+    <label>Bottles<input name="qty" type="number" step="1" min="1" value="1" style="width:5rem"></label>
+    <label>What happened<select name="kind">{% for k in bottle_kinds %}<option>{{ k }}</option>{% endfor %}</select></label>
+    <label>Rating<select name="rating"><option value="">—</option>{% for n in range(5, 0, -1) %}<option value="{{ n }}">{{ "★" * n }}</option>{% endfor %}</select></label>
+    <label style="flex:1 1 220px">Tasting note<input name="note" placeholder="smoother than last time, a bit hot…"></label>
+    <label>Date<input name="on_date" type="date" value="{{ today }}"></label>
+    <button>Open a bottle</button>
+  </form>
+  {% endif %}
+  {% if s.outs %}<div class="scroll" style="margin-top:.75rem"><table>
+    <tr><th>Date</th><th class="r">Bottles</th><th></th><th>Rating</th><th>Note</th><th>By</th><th></th></tr>
+    {% for o in s.outs %}<tr>
+      <td class="soft">{{ o.on_date }}</td><td class="num r">{{ o.qty }}</td><td>{{ o.kind }}</td>
+      <td style="color:var(--accent)">{{ "★" * o.rating if o.rating else "" }}</td><td class="wrap">{{ o.note or "" }}</td><td class="muted">{{ o.who or "" }}</td>
+      <td><form class="inline" method="post" action="/batch/{{ b.id }}/bottle_out/{{ o.id }}/delete"><button class="link" title="Remove">✕</button></form></td>
+    </tr>{% endfor %}
+  </table></div>{% endif %}
+</section>
+{% endif %}
 
 <div class="pair" id="overview">
   <section class="wide">
@@ -260,6 +293,29 @@
   </form>
 </section>
 
+<section id="photos">
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:baseline;justify-content:space-between">
+    <h2>Photos</h2>
+    {% if b.status != "recipe" %}<a href="/batch/{{ b.id }}/label">Print labels →</a>{% endif %}
+  </div>
+  {% if photos %}<div class="photos">
+    {% for p in photos %}<figure>
+      <a href="/uploads/{{ p.file }}" target="_blank" rel="noopener"><img src="/uploads/{{ p.file }}" alt="{{ p.caption or ('Photo of ' ~ b.name) }}" loading="lazy"></a>
+      <figcaption>{{ p.caption or "" }} <span class="muted small">{{ p.added_on }}{% if p.who %} · {{ p.who }}{% endif %}</span></figcaption>
+      <div style="display:flex;gap:.4rem;align-items:center">
+        <form method="post" action="/batch/{{ b.id }}/photo/{{ p.id }}/label"><button class="{{ '' if p.on_label else 'ghost' }}" style="min-height:32px;padding:.2rem .6rem;font-size:.82rem">{{ "On the label ✓" if p.on_label else "Use on label" }}</button></form>
+        <form method="post" action="/batch/{{ b.id }}/photo/{{ p.id }}/delete" onsubmit="return confirm('Delete this photo?')"><button class="link" title="Delete photo">✕</button></form>
+      </div>
+    </figure>{% endfor %}
+  </div>{% else %}<p class="muted" style="margin:0">No photos yet.</p>{% endif %}
+  <form class="row" method="post" action="/batch/{{ b.id }}/photo" enctype="multipart/form-data">
+    <label>Photo<input name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required></label>
+    <label style="flex:1 1 200px">Caption<input name="caption" placeholder="racked onto apples"></label>
+    <label style="flex-direction:row;gap:.4rem;align-items:center">Use on label<input type="checkbox" name="on_label"></label>
+    <button>Upload</button>
+  </form>
+</section>
+
 <details id="details" class="card">
   <summary style="font-size:1.1rem;font-weight:700;color:var(--fg)">Details</summary>
   <form method="post" action="/batch/{{ b.id }}" style="margin-top:.9rem">
@@ -275,6 +331,7 @@
       <label>Start / pitch<input name="start_date" type="date" value="{{ b.start_date or '' }}"></label>
       <label>Bottled<input name="bottle_date" type="date" value="{{ b.bottle_date or '' }}"></label>
       <label>Bottles filled<input name="bottles" type="number" step="1" min="0" value="{{ b.bottles or '' }}"></label>
+      <label>Ready from<input name="ready_on" type="date" value="{{ b.ready_on or '' }}" title="Strong meads (14%+) usually want 6–12 months in the bottle"></label>
       <label>Target OG<input name="target_og" type="number" step="0.001" value="{{ b.target_og or '' }}"></label>
       <label>Target FG (min)<input name="target_fg" type="number" step="0.001" value="{{ b.target_fg or '' }}"></label>
       <label>Target FG (max)<input name="target_fg_max" type="number" step="0.001" value="{{ b.target_fg_max or '' }}"></label>

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Labels: {{ b.name }} · Mead Log{% endblock %}
+{% block head %}
+{% set w, h, _ = sizes[size] %}
+<style>
+  .controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; }
+  .sheet { display: flex; flex-wrap: wrap; gap: .12in; margin-top: 1rem; }
+  .label { width: {{ w }}; height: {{ h }}; box-sizing: border-box; border: 1px dashed #b9ad95; background: #fffdf8; color: #2a2418;
+           font-family: Inter, system-ui, sans-serif; overflow: hidden; display: flex; flex-direction: {{ 'row' if size == 'small' else 'column' }}; }
+  .label .art { flex: {{ '0 0 42%' if size == 'small' else '0 0 52%' }}; background: #f3ede0 center / cover no-repeat; }
+  .label .art.none { background: #2b2214; display: flex; align-items: center; justify-content: center; }
+  .label .txt { flex: 1; padding: {{ '.12in .14in' if size == 'small' else '.16in .2in' }}; display: flex; flex-direction: column; gap: .04in; min-width: 0; }
+  .label .name { font-weight: 700; font-size: {{ '13pt' if size == 'small' else '17pt' }}; line-height: 1.1; letter-spacing: -.01em; }
+  .label .style { font-size: {{ '7.5pt' if size == 'small' else '9pt' }}; text-transform: uppercase; letter-spacing: .08em; color: #8f560b; font-weight: 600; }
+  .label .line { font-size: {{ '8pt' if size == 'small' else '10pt' }}; font-style: italic; color: #4f4636; }
+  .label .facts { margin-top: auto; display: flex; justify-content: space-between; gap: .1in; font-size: {{ '7.5pt' if size == 'small' else '8.5pt' }}; color: #4f4636; border-top: 1px solid #e4dccb; padding-top: .05in; }
+  .label .facts span { white-space: nowrap; }
+  .label .by { font-size: {{ '6.5pt' if size == 'small' else '7.5pt' }}; color: #6a5f4b; }
+  @media print {
+    @page { margin: .4in; }
+    body { background: #fff; }
+    .top, .controls, .noprint { display: none !important; }
+    main { padding: 0; max-width: none; }
+    .label { break-inside: avoid; }
+  }
+</style>
+{% endblock %}
+{% block body %}
+<a class="crumb noprint" href="/batch/{{ b.id }}" style="font-size:.9rem;color:var(--muted);text-decoration:none">← {{ b.name }}</a>
+<h1 class="noprint" style="margin:.3rem 0 .9rem">Bottle labels</h1>
+<form class="controls" method="get">
+  <label>Size<select name="size">{% for k, v in sizes.items() %}<option value="{{ k }}" {{ "selected" if k == size }}>{{ v[2] }}</option>{% endfor %}</select></label>
+  <label>How many<input name="count" type="number" min="1" max="60" value="{{ count }}" style="width:5.5rem"></label>
+  <label style="flex:1 1 220px">Tagline<input name="line" value="{{ line }}" placeholder="Orange blossom & patience"></label>
+  <label style="flex:1 1 200px">Bottom line<input name="by" value="{{ by }}"></label>
+  <button class="ghost">Update</button>
+  <button type="button" onclick="window.print()">Print</button>
+</form>
+<p class="muted small noprint" style="margin:.6rem 0 0">
+  {% if photo %}Using the photo marked for the label.{% elif has_photo %}No photo is marked "Use on label" on the batch page, so the labels are text-only.{% else %}Add a photo on the <a href="/batch/{{ b.id }}#photos">batch page</a> and mark it "Use on label" to put it here.{% endif %}
+  Print at 100% scale, then cut along the dashed lines.</p>
+
+<div class="sheet">
+  {% for _ in range(count) %}
+  <div class="label">
+    {% if photo %}<div class="art" style="background-image:url('/uploads/{{ photo.file }}')" role="img" aria-label="{{ photo.caption or 'Label image' }}"></div>
+    {% elif size == "wine" %}<div class="art none" aria-hidden="true"><svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="#e8a93a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z"/><path d="M8 11h8M8 14.5h8"/></svg></div>{% endif %}
+    <div class="txt">
+      <div class="style">{{ b.style or "mead" }}{% if s.style_class %} · {{ s.style_class }}{% endif %}</div>
+      <div class="name">{{ b.name }}</div>
+      {% if line %}<div class="line">{{ line }}</div>{% endif %}
+      <div class="facts"><span>{{ "%.1f%% ABV"|format(s.abv) if s.abv is defined else "ABV —" }}</span><span>{{ "Bottled " ~ b.bottle_date[:7] if b.bottle_date else ("Brewed " ~ b.start_date[:7] if b.start_date else "") }}</span>{% if size != "small" %}<span>750 mL</span>{% endif %}</div>
+      {% if by %}<div class="by">{{ by }}</div>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
