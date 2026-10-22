@@ -1,101 +1,340 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Live Aircraft Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADS-B Console · Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <style>
-  body { margin: 0; font-family: system-ui, sans-serif; background: #0b0d12; }
-  #map { position: absolute; top: 40px; bottom: 0; left: 0; right: 0; }
-  #bar { height: 40px; display: flex; align-items: center; padding: 0 12px; color: #cfd8e3; font-size: 13px; background: #0b0d12; }
-  .plane-wrap { display: flex; flex-direction: column; align-items: center; pointer-events: none; }
-  .plane-icon { font-size: 18px; text-shadow: 0 0 3px #000; }
-  .plane-label { font-size: 10px; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap; margin-top: -2px; }
-  .leaflet-popup-content { font-size: 13px; line-height: 1.5; }
-  #bar .spacer { flex: 1; }
-  #bar button, #playbar button { background: #11141c; color: #cfd8e3; border: 1px solid #263044; border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 12px; }
-  #bar button.on { background: #1d2a44; border-color: #4a6fa5; }
-  #health { margin-left: 14px; font-size: 12px; color: #6fcf97; }
-  #health.bad { color: #ff6b6b; }
-  #warn {
-    position: absolute; top: 48px; left: 50%; transform: translateX(-50%); z-index: 1100;
-    max-width: 70%; background: rgba(120,20,20,0.95); color: #fff; font-size: 12px;
-    border-radius: 6px; padding: 6px 12px; line-height: 1.5;
+  :root { --bg:#0B0E13; --card:#11151C; --line:#1A1F28; --line2:#1E2430; --raised:#161B24; --text:#C9D1DC; --hi:#F2F5F9;
+          --mute:#7D8796; --dim:#5F6977; --faint:#4A5361; --violet:#8B7CFF; --cyan:#4FD1E8; --green:#5BD08A; --orange:#F5A65B; --pink:#E8689A; --red:#FF6B6B;
+          --mono:'JetBrains Mono', ui-monospace, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 Inter, system-ui, sans-serif; }
+  a { color: #A99BFF; } a:hover { color: #D3CBFF; }
+  .mono { font-family: var(--mono); }
+  button, select, input { font: inherit; }
+
+  #app { height: 100vh; display: grid; grid-template-columns: minmax(0,1fr) 340px; grid-template-rows: 52px auto minmax(0,1fr) auto; gap: 12px; padding: 0 16px 16px; }
+  header.top { grid-column: 1 / -1; display: flex; align-items: center; gap: 20px; border-bottom: 1px solid var(--line); margin: 0 -16px; padding: 0 20px; min-width: 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--hi); white-space: nowrap; }
+  .brand i { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--violet), var(--cyan)); }
+  nav { display: flex; gap: 2px; }
+  nav a { text-decoration: none; color: var(--mute); padding: 6px 12px; border-radius: 6px; font-weight: 500; }
+  nav a:hover { color: var(--hi); }
+  nav a.on { color: var(--hi); background: var(--raised); }
+  .spacer { flex: 1; }
+  #health { font-size: 12px; color: var(--green); white-space: nowrap; }
+  #health.bad { color: var(--red); }
+  .search { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--line2); border-radius: 8px; padding: 6px 10px; width: 260px; }
+  .search input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--hi); font-size: 12px; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+  #kpis { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 12px; }
+  .kpi { border-radius: 12px; padding: 12px 16px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .kpi .k { display: flex; justify-content: space-between; gap: 8px; color: var(--mute); font-size: 12px; white-space: nowrap; }
+  .kpi .d { overflow: hidden; text-overflow: ellipsis; }
+  .kpi .row { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
+  .kpi .v { font-size: 24px; font-weight: 600; color: var(--hi); letter-spacing: -.01em; white-space: nowrap; }
+  .spark { display: flex; align-items: flex-end; gap: 2px; height: 26px; width: 84px; flex: none; }
+  .spark span { flex: 1; border-radius: 1px; opacity: .45; min-height: 1px; }
+  .spark span:last-child { opacity: 1; }
+
+  #mapcard { position: relative; overflow: hidden; background: #0E1219; min-height: 0; }
+  #map { position: absolute; inset: 0; background: #0E1219; }
+  #warn { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1100; max-width: 80%; background: rgba(110,24,32,.95);
+          border: 1px solid rgba(255,107,107,.4); color: #fff; font-size: 12px; border-radius: 8px; padding: 6px 12px; }
+  #warn[hidden] { display: none; }
+  .legend { position: absolute; left: 14px; bottom: 14px; z-index: 1000; background: rgba(17,21,28,.9); border: 1px solid var(--line2); border-radius: 8px; padding: 8px 10px; font-size: 11px; color: var(--mute); }
+  .legend .bar { width: 180px; height: 6px; border-radius: 3px; margin-top: 5px;
+                 background: linear-gradient(90deg, var(--orange) 0 15%, var(--pink) 15% 37.5%, var(--violet) 37.5% 75%, var(--cyan) 75%); }
+  .legend .ticks { position: relative; height: 14px; margin-top: 3px; font-family: var(--mono); }
+  .legend .ticks span { position: absolute; }
+
+  .leaflet-container { background: #0E1219; font-family: inherit; }
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(200deg) brightness(.72) contrast(.9) saturate(.35); }
+  .leaflet-bar { border: 1px solid var(--line2) !important; border-radius: 8px !important; overflow: hidden; }
+  .leaflet-bar a, .leaflet-bar a:hover { background: rgba(17,21,28,.92); color: var(--text); border-bottom-color: var(--line2); }
+  .leaflet-control-attribution { background: rgba(11,14,19,.75) !important; color: var(--dim); }
+  .leaflet-control-attribution a { color: var(--mute); }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--raised); color: var(--text); border: 1px solid #2A3140; box-shadow: 0 12px 30px rgba(0,0,0,.45); }
+  .leaflet-popup-content-wrapper { border-radius: 10px; }
+  .leaflet-popup-content { margin: 10px 12px; font-size: 12px; line-height: 1.45; min-width: 190px; }
+  .leaflet-container a.leaflet-popup-close-button { color: var(--mute); }
+  .ring-lbl { font: 10px var(--mono); color: var(--faint); white-space: nowrap; }
+
+  .plane { position: relative; width: 20px; height: 20px; pointer-events: none; }
+  .plane-icon { display: block; }
+  .plane-label { position: absolute; left: 18px; top: -9px; font: 11px var(--mono); color: var(--mute); white-space: nowrap; text-shadow: 0 0 3px #0B0E13, 0 0 3px #0B0E13; }
+
+  .pop-h { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .pop-h b { color: var(--hi); font-size: 13px; }
+  .pop-h span, .pop-sub { color: var(--mute); }
+  .pop-grid { margin-top: 8px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; font-family: var(--mono); font-size: 11px; }
+  .pop-grid span { display: block; color: var(--dim); }
+  .pop-grid b { color: var(--hi); font-weight: 500; }
+  .pop-more { margin-top: 8px; display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; font-size: 11px; }
+  .pop-more span:nth-child(odd) { color: var(--dim); }
+  .pop-btns { margin-top: 8px; display: flex; gap: 6px; }
+  .leaflet-popup-content a.btn { flex: 1; text-align: center; text-decoration: none; background: var(--line2); color: var(--text); border-radius: 6px; padding: 5px 0; font-size: 12px; }
+  .leaflet-popup-content a.btn.primary { background: var(--violet); color: var(--bg); font-weight: 600; }
+  .pop-photo { width: 100%; border-radius: 6px; margin-bottom: 4px; display: block; }
+  .pop-credit { font-size: 10px; color: var(--dim); margin-bottom: 6px; }
+
+  #side { grid-row: 3 / 5; grid-column: 2; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .panel { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+  .panel-h { padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); flex: none; }
+  .panel-h b { color: var(--hi); font-weight: 600; }
+  .panel-h span { font-size: 12px; color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list { overflow: auto; min-height: 0; }
+  #traffic { flex: 1 1 60%; }
+  #closest { flex: 0 1 auto; max-height: 34%; }
+  .tr { display: grid; grid-template-columns: 8px minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 8px 14px; cursor: pointer; }
+  .tr:hover { background: #191E29; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .tr .cs { color: var(--hi); font-weight: 600; font-family: var(--mono); font-size: 12px; }
+  .tr .sub { color: var(--mute); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tr .rng { font-family: var(--mono); font-size: 12px; text-align: right; }
+  .empty { padding: 14px; color: var(--dim); font-size: 12px; }
+  #alerts { flex: none; }
+  #alerts .panel-h span.ok { color: var(--green); }
+  #alerts .panel-h span.bad { color: var(--red); }
+  #alert-body { padding: 9px 14px 12px; font-size: 12px; }
+  #alert-body .note { color: var(--dim); font-size: 11px; margin-top: 4px; }
+
+  #tl { grid-column: 1; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .tl-head { display: flex; align-items: center; gap: 10px 12px; flex-wrap: wrap; }
+  #pb-play { width: 30px; height: 30px; border-radius: 8px; border: 0; background: var(--violet); color: var(--bg); cursor: pointer; font-size: 12px; flex: none; }
+  .chip { font-family: var(--mono); font-size: 12px; color: var(--mute); background: transparent; border: 1px solid var(--line2); border-radius: 6px; padding: 3px 6px; color-scheme: dark; }
+  .chip option { background: var(--card); }
+  #pb-when { color: var(--hi); font-weight: 600; white-space: nowrap; }
+  #pb-note { color: var(--mute); font-size: 12px; }
+  .seg { display: flex; gap: 2px; background: var(--bg); border: 1px solid var(--line2); border-radius: 8px; padding: 2px; }
+  .seg button { border: 0; background: transparent; color: var(--mute); padding: 3px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .seg button.on { background: var(--line2); color: var(--hi); }
+  #pb-live { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer; color: var(--text); background: var(--line2); }
+  #pb-live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  #pb-live.live { color: var(--green); background: rgba(91,208,138,.12); cursor: default; }
+  .tl-body { position: relative; height: 72px; }
+  #hist { position: absolute; inset: 0 0 14px 0; display: flex; align-items: flex-end; gap: 2px; pointer-events: none; }
+  #hist div { flex: 1; border-radius: 1px; background: #232A37; }
+  #hist div.past { background: #3A3270; }
+  #gaps .gap { position: absolute; top: 0; bottom: 14px; border-radius: 4px; pointer-events: none; overflow: hidden; white-space: nowrap;
+               background: repeating-linear-gradient(135deg, rgba(245,166,91,.12) 0 5px, transparent 5px 10px);
+               display: flex; align-items: center; justify-content: center; color: var(--orange); font-size: 11px; }
+  #pb-slider { position: absolute; left: 0; right: 0; top: -6px; bottom: 14px; width: 100%; height: auto; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; }
+  #pb-slider::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+  #pb-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 64px; border: 0; background: linear-gradient(var(--hi), var(--hi)) center / 2px 100% no-repeat; }
+  #pb-slider::-moz-range-track { background: transparent; }
+  #pb-slider::-moz-range-thumb { width: 2px; height: 64px; border: 0; border-radius: 0; background: var(--hi); }
+  #pb-slider:focus-visible { outline: 1px solid var(--violet); outline-offset: 2px; border-radius: 4px; }
+  .tl-axis { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; font: 10px var(--mono); color: var(--faint); pointer-events: none; }
+
+  @media (max-width: 900px) {
+    #app { height: auto; min-height: 100vh; grid-template-columns: minmax(0,1fr); grid-template-rows: auto auto 420px auto auto; }
+    header.top { flex-wrap: wrap; gap: 8px 14px; padding: 8px 16px; }
+    .search { display: none; }
+    #kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    #side { grid-row: auto; grid-column: 1; }
+    #traffic .list { max-height: 320px; }
   }
-  #warn[hidden], #playbar[hidden] { display: none; }
-  #playbar {
-    position: absolute; left: 12px; right: 12px; bottom: 26px; z-index: 1000;
-    background: rgba(11,13,18,0.92); color: #cfd8e3; font-size: 12px; border-radius: 6px; padding: 8px 10px;
+  /* ---- phone: map-first. Full-screen map, floating timeline pill, swipeable aircraft cards. ---- */
+  .m-only { display: none !important; }
+  #cards[hidden] { display: none !important; }
+  @media (max-width: 700px) {
+    .m-only { display: flex !important; }
+    #app { display: block; height: 100vh; height: 100dvh; min-height: 0; padding: 0; position: relative; overflow: hidden; }
+    header.top, #kpis, .legend, .leaflet-bottom.leaflet-right { display: none; }
+    #mapcard { position: absolute; inset: 0; border: 0; border-radius: 0; }
+    #warn { top: 58px; left: 12px; right: 12px; max-width: none; transform: none; background: #3A1420; border-color: rgba(232,104,154,.4); color: #FFD0DE; font-size: 13px; }
+    #m-mode { position: absolute; top: 12px; left: 16px; z-index: 1000; font: 12px var(--mono); background: rgba(17,21,28,.93); border: 1px solid var(--line); color: var(--cyan); border-radius: 999px; padding: 7px 12px; }
+    body.replay #m-mode { background: var(--violet); color: var(--bg); border-color: transparent; font-weight: 500; }
+    .fabs { position: absolute; right: 16px; bottom: 112px; z-index: 1000; flex-direction: column; gap: 8px; }
+    body.tl-open .fabs, body.replay .fabs { bottom: 236px; }
+    body.cards-on .fabs { bottom: 410px; }
+    .fab { width: 52px; height: 52px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+    .fab.bad { border-color: var(--pink); box-shadow: 0 0 0 3px rgba(232,104,154,.25); }
+
+    #side { display: none; position: fixed; inset: 0; z-index: 1200; background: var(--bg); padding: 12px; overflow: auto; }
+    body.side-open #side { display: flex; }
+    #side-close { align-self: flex-end; width: 44px; height: 44px; border-radius: 22px; background: var(--card); border: 1px solid var(--line); color: var(--hi); font-size: 18px; flex: none; align-items: center; justify-content: center; cursor: pointer; }
+    #traffic, #closest { flex: none; max-height: none; }
+    #alerts { order: -1; }
+    #side-close { order: -2; }
+    #traffic .list { max-height: none; }
+    .tr { min-height: 52px; }
+
+    #tl { position: absolute; left: 12px; right: 12px; bottom: 16px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 1000; background: rgba(17,21,28,.96);
+          border: 1px solid #2A3140; border-radius: 24px; padding: 12px 14px; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .tl-head { display: contents; }
+    #pb-when, .tl-head .spacer { display: none; }
+    #pb-spans { order: 1; border-radius: 999px; }
+    .seg button { min-height: 36px; min-width: 36px; border-radius: 999px; padding: 0 6px; }
+    #pb-goto { order: 2; margin-left: auto; min-height: 44px; width: 0; flex: 1 1 0; min-width: 96px; font-size: 11px; border-radius: 22px; }
+    .tl-body { order: 3; flex: 1 1 100%; height: 58px; }
+    #pb-play { order: 4; width: 48px; height: 48px; border-radius: 24px; }
+    #pb-speed { order: 5; min-height: 44px; border-radius: 22px; padding: 0 10px; }
+    #pb-note { order: 6; flex: 1; font-family: var(--mono); min-width: 0; }
+    #pb-live { order: 7; min-height: 44px; border-radius: 22px; padding: 0 14px; }
+    #pb-live.live { background: var(--line2); color: var(--cyan); }
+    #pb-slider { top: -8px; }
+    #pb-slider::-webkit-slider-thumb { width: 28px; height: 52px; background: linear-gradient(var(--violet), var(--violet)) center / 3px 100% no-repeat; }
+    #pb-slider::-moz-range-thumb { width: 3px; height: 52px; background: var(--violet); }
+    /* live and not expanded: collapsed pill */
+    body:not(.replay):not(.tl-open) #tl { flex-wrap: nowrap; border-radius: 32px; padding: 8px; }
+    body:not(.replay):not(.tl-open) :is(#pb-spans, #pb-goto, #pb-speed, #pb-note, .tl-axis, #gaps) { display: none; }
+    body:not(.replay):not(.tl-open) .tl-body { order: 5; flex: 1; height: 32px; }
+    body:not(.replay):not(.tl-open) #hist { bottom: 0; }
+    body:not(.replay):not(.tl-open) #pb-slider { top: -4px; bottom: -4px; }
+
+    #cards { position: absolute; left: 0; right: 0; bottom: 96px; z-index: 1000; flex-direction: column; gap: 6px; }
+    body.tl-open #cards { bottom: 214px; }
+    #card-track { display: flex; gap: 10px; padding: 0 16px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; position: relative; }
+    #card-track::-webkit-scrollbar { display: none; }
+    .acard { flex: 0 0 calc(100vw - 60px); min-width: 0; scroll-snap-align: center; background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .acard.sel { border-color: rgba(79,209,232,.4); }
+    .acard .ah { display: flex; gap: 12px; align-items: center; }
+    .acard .ph { width: 64px; height: 64px; border-radius: 12px; background: var(--line) center / cover no-repeat; flex: none; }
+    .acard .cs { font: 18px var(--mono); color: var(--hi); }
+    .acard .sub { font-size: 13px; color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .acard .st { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; font-family: var(--mono); font-size: 14px; color: var(--hi); }
+    .acard .st span { display: block; font: 11px Inter, sans-serif; color: var(--mute); }
+    .acard .btns { display: flex; gap: 8px; }
+    .acard .btns a, .acard .btns button { flex: 1; min-height: 44px; border-radius: 12px; background: var(--line2); border: 0; color: #E6EAF0; display: flex; align-items: center; justify-content: center; text-decoration: none; font-size: 13px; cursor: pointer; }
+    .card-nav { display: flex; align-items: center; justify-content: center; gap: 10px; }
+    .card-nav button { width: 44px; height: 44px; border-radius: 22px; background: rgba(17,21,28,.93); border: 1px solid var(--line); color: var(--hi); font-size: 18px; cursor: pointer; }
+    .card-nav button:disabled { opacity: .35; }
+    #card-n { font: 12px var(--mono); color: var(--mute); min-width: 60px; text-align: center; background: rgba(17,21,28,.8); border-radius: 999px; padding: 3px 8px; }
   }
-  #playbar .pb-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  #playbar .pb-row + .pb-row { margin-top: 6px; }
-  #playbar input, #playbar select { background: #11141c; color: #cfd8e3; border: 1px solid #263044; border-radius: 4px; padding: 2px 4px; font-size: 12px; }
-  #pb-slider { flex: 1; min-width: 120px; }
-  #pb-time { min-width: 170px; text-align: right; }
-  #closest-panel {
-    position: absolute; top: 52px; right: 12px; z-index: 1000;
-    background: rgba(11,13,18,0.9); color: #cfd8e3; font-size: 12px;
-    border-radius: 6px; padding: 8px 10px; width: 200px;
-  }
-  #closest-panel h3 { margin: 0 0 6px; font-size: 12px; color: #8fa3c0; font-weight: 600; }
-  #closest-panel ol { margin: 0; padding-left: 18px; }
-  #closest-panel li { margin-bottom: 2px; }
+  /* Inside the /hub iframe: just the map and timeline. */
+  body.embedded #app { height: 100vh; grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr) auto; padding: 8px; gap: 8px; }
+  body.embedded header.top, body.embedded #kpis, body.embedded #side { display: none; }
+  body.embedded #mapcard, body.embedded #tl { grid-row: auto; }
 </style>
 </head>
 <body>
-  <div id="bar">
-    <span>Live Aircraft Map — <span id="count">0</span> aircraft tracked</span>
+<div id="app">
+  <header class="top">
+    <div class="brand"><i></i>Console</div>
+    <nav><a class="on" href="/">Live</a><a href="/fleet">Aircraft</a><a href="/coverage/">Coverage</a><a href="/hub">Hub</a></nav>
     <span id="health"></span>
     <span class="spacer"></span>
-    <button id="pb-toggle">Playback</button>
+    <label class="search">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#5F6977" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      <input id="q" placeholder="Jump to tail, hex or callsign" aria-label="Jump to tail, hex or callsign">
+    </label>
+  </header>
+
+  <div id="kpis">
+    <div class="card kpi" id="k-now"><div class="k"><span>Aircraft now</span><span class="d"></span></div><div class="row"><span class="v">–</span><span class="spark"></span></div></div>
+    <div class="card kpi" id="k-seen"><div class="k"><span>Seen today</span><span class="d"></span></div><div class="row"><span class="v">–</span><span class="spark"></span></div></div>
+    <div class="card kpi" id="k-far"><div class="k"><span>Max range today</span><span class="d"></span></div><div class="row"><span class="v">–</span><span class="spark"></span></div></div>
+    <div class="card kpi" id="k-near"><div class="k"><span>Closest today</span><span class="d"></span></div><div class="row"><span class="v">–</span><span class="spark"></span></div></div>
+    <div class="card kpi" id="k-pos"><div class="k"><span>Positions today</span><span class="d"></span></div><div class="row"><span class="v">–</span><span class="spark"></span></div></div>
   </div>
-  <div id="warn" hidden></div>
-  <div id="map"></div>
-  <div id="playbar" hidden>
-    <div class="pb-row">
-      <label>Start <input type="datetime-local" id="pb-start"></label>
-      <label>Length
-        <select id="pb-len">
-          <option value="1800">30 min</option><option value="3600" selected>1 hour</option>
-          <option value="10800">3 hours</option><option value="21600">6 hours</option>
-          <option value="43200">12 hours</option><option value="86400">24 hours</option>
-        </select>
-      </label>
-      <button id="pb-load">Load</button>
-      <button id="pb-latest" title="Jump to the most recent logged data">Latest data</button>
-      <span id="pb-info"></span>
+
+  <section class="card" id="mapcard">
+    <div id="map"></div>
+    <div id="warn" hidden></div>
+    <div id="m-mode" class="m-only">LIVE</div>
+    <div class="fabs m-only">
+      <a class="fab" href="/fleet" aria-label="Aircraft list"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#E6EAF0" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg></a>
+      <a class="fab" href="/coverage/" aria-label="Coverage map"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#E6EAF0" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/></svg></a>
+      <button class="fab" id="fab-side" aria-label="Live traffic, alerts and feed health"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#E6EAF0" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0112 0c0 7 3 8 3 8H3s3-1 3-8"/></svg></button>
     </div>
-    <div class="pb-row">
-      <button id="pb-play" disabled>&#9654;</button>
-      <select id="pb-speed" title="Playback speed">
-        <option value="1">1x</option><option value="10">10x</option><option value="30">30x</option>
-        <option value="60" selected>60x</option><option value="300">300x</option>
+    <div id="cards" class="m-only" hidden>
+      <div id="card-track"></div>
+      <div class="card-nav"><button id="card-prev" aria-label="Previous aircraft">‹</button><span id="card-n"></span><button id="card-next" aria-label="Next aircraft">›</button></div>
+    </div>
+    <div class="legend">Altitude<div class="bar"></div>
+      <div class="ticks"><span style="left:0">0</span><span style="left:15%">6k</span><span style="left:37.5%">15k</span><span style="left:75%">30k ft</span></div>
+    </div>
+  </section>
+
+  <aside id="side">
+    <button id="side-close" class="m-only" aria-label="Close">×</button>
+    <div class="card panel" id="traffic">
+      <div class="panel-h"><b>Live traffic</b><span id="traffic-n">–</span></div>
+      <div class="list" id="traffic-list"></div>
+    </div>
+    <div class="card panel" id="closest">
+      <div class="panel-h"><b>Closest approaches</b><span>all time</span></div>
+      <div class="list" id="closest-list"></div>
+    </div>
+    <div class="card panel" id="alerts">
+      <div class="panel-h"><b>Alerts</b><span id="alert-status">–</span></div>
+      <div id="alert-body"></div>
+    </div>
+  </aside>
+
+  <section class="card" id="tl">
+    <div class="tl-head">
+      <button id="pb-play" title="Play / pause" aria-label="Play / pause">&#9654;</button>
+      <select id="pb-speed" class="chip" title="Playback speed">
+        <option value="1">1×</option><option value="10">10×</option><option value="30">30×</option>
+        <option value="60" selected>60×</option><option value="300">300×</option>
       </select>
-      <input type="range" id="pb-slider" min="0" max="1" step="1" value="0" disabled>
-      <span id="pb-time">&mdash;</span>
-      <button id="pb-live">Back to live</button>
+      <span id="pb-when">Live</span><span id="pb-note"></span>
+      <span class="spacer"></span>
+      <input type="datetime-local" id="pb-goto" class="chip" title="Jump to a time">
+      <div class="seg" id="pb-spans" title="How far back the timeline reaches">
+        <button data-v="3600">1h</button><button data-v="21600">6h</button><button data-v="86400" class="on">24h</button><button data-v="604800">7d</button><button data-v="0">All</button>
+      </div>
+      <input type="hidden" id="pb-span" value="86400">
+      <button id="pb-live" class="live" title="Back to live">LIVE</button>
     </div>
-  </div>
-  <div id="closest-panel">
-    <h3>Closest Approaches</h3>
-    <ol id="closest-list"></ol>
-  </div>
+    <div class="tl-body">
+      <div id="hist"></div>
+      <div id="gaps"></div>
+      <input type="range" id="pb-slider" min="0" max="1" step="1" value="1" title="Drag left to go back in time" aria-label="Timeline">
+      <div class="tl-axis" id="tl-axis"></div>
+    </div>
+  </section>
+</div>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-let map, markers = {}, receiverPos = null;
+if (window !== window.top) document.body.classList.add('embedded');
+
+let map, markers = {}, receiverPos = null, liveAircraft = [];
+const trails = {};  // hex -> { pts: [[t, lat, lon]], line } - live trails, built from polls since page load
 const urlParams = new URLSearchParams(location.search);
 const focusHex = urlParams.get('hex');
 const focusLat = urlParams.get('lat');
 const focusLon = urlParams.get('lon');
+const focusAt = urlParams.get('at');  // unix seconds: open the timeline at this moment (used by the /fleet page)
 let focusedLive = false;  // true once we've centered on a live match for focusHex
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fetchJson = async url => { const r = await fetch(url); if (!r.ok) throw new Error(r.status); return r.json(); };
+
+// Altitude ramp shared by plane icons, trails and list dots.
+function altColor(alt) {
+  if (alt === 'ground') alt = 0;
+  if (typeof alt !== 'number') return '#7D8796';
+  return alt < 6000 ? '#F5A65B' : alt < 15000 ? '#E8689A' : alt < 30000 ? '#8B7CFF' : '#4FD1E8';
+}
+function fmtAlt(alt) {
+  if (alt == null) return '—';
+  if (typeof alt !== 'number') return String(alt);
+  return alt >= 18000 ? 'FL' + Math.round(alt / 100) : Math.round(alt).toLocaleString() + ' ft';
+}
+const fmtKm = km => km < 10 ? km.toFixed(1) : km.toFixed(0);
 
 function initMap(lat, lon) {
-  map = L.map('map').setView([lat, lon], 8);
+  map = L.map('map', { zoomControl: false }).setView([lat, lon], 8);
   window.leafletMap = map;  // read by hub.html to sync panning/zoom
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors'
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
+  // CARTO's dark basemap now needs an API key; OSM tiles darkened in CSS (.leaflet-tile-pane) instead.
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19,
   }).addTo(map);
-  L.marker([lat, lon]).addTo(map).bindPopup('Receiver');
+  for (const km of [50, 100, 150, 200]) {
+    L.circle([lat, lon], { radius: km * 1000, color: '#2A3140', weight: 1, dashArray: '3 5', fill: false, interactive: false }).addTo(map);
+    L.marker([lat + km / 111.2, lon], { interactive: false, icon: L.divIcon({ className: 'ring-lbl', html: `${km} km`, iconSize: [50, 12], iconAnchor: [-4, 14] }) }).addTo(map);
+  }
+  L.circleMarker([lat, lon], { radius: 5, color: '#F2F5F9', weight: 7, opacity: .25, fillColor: '#F2F5F9', fillOpacity: 1 }).addTo(map).bindPopup('Receiver');
   receiverPos = [lat, lon];
 
   // A linked aircraft may already be gone from the live feed by the time
@@ -106,18 +345,23 @@ function initMap(lat, lon) {
   if (focusHex && focusLat && focusLon) {
     map.setView([+focusLat, +focusLon], 11);
     L.popup({ maxWidth: 280 }).setLatLng([+focusLat, +focusLon])
-      .setContent(`<b>Alert location</b><br>Hex: ${focusHex}<br><span style="color:#888;font-size:11px;">Position at alert time - may no longer be in range</span>`)
+      .setContent(`<b>Alert location</b><br>Hex: ${esc(focusHex)}<br><span style="color:#7D8796;font-size:11px;">Position at alert time - may no longer be in range</span>`)
       .openOn(map);
   }
 }
 
-function planeIcon(track, label) {
+const PLANE_PATH = 'M12 1.5C12.9 1.5 13.5 2.4 13.5 3.5V8.5L22 13.5V15.5L13.5 13V18.5L16 20.5V22L12 21L8 22V20.5L10.5 18.5V13L2 15.5V13.5L10.5 8.5V3.5C10.5 2.4 11.1 1.5 12 1.5Z';
+
+// Points north at rotation 0, so rotate(track) is the true direction of flight.
+function planeIcon(track, label, alt) {
   return L.divIcon({
-    html: `<div class="plane-wrap">
-             <div class="plane-icon" style="transform: rotate(${track || 0}deg)">&#9992;</div>
-             <div class="plane-label">${label}</div>
+    html: `<div class="plane">
+             <svg class="plane-icon" viewBox="0 0 24 24" width="20" height="20" style="transform: rotate(${+track || 0}deg)">
+               <path d="${PLANE_PATH}" fill="${altColor(alt)}" stroke="#0E1219" stroke-width="1"/>
+             </svg>
+             <div class="plane-label">${esc(label)}</div>
            </div>`,
-    className: '', iconSize: [60, 34], iconAnchor: [30, 12],
+    className: '', iconSize: [20, 20], iconAnchor: [10, 10], popupAnchor: [0, -8],
   });
 }
 
@@ -128,109 +372,249 @@ function distanceKm(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
 }
+const rangeOf = a => receiverPos && a.lat != null && a.lon != null ? distanceKm(receiverPos[0], receiverPos[1], a.lat, a.lon) : null;
 
 function photoBlockHtml(photo) {
-  if (!photo || !photo.url) return '';
+  if (!photo || !/^https?:\/\//.test(photo.url || '')) return '';
   const caption = photo.source === 'real' ? 'actual aircraft' : 'stock photo, type match';
-  return `<img src="${photo.url}" style="width:100%;max-width:260px;border-radius:4px;margin-bottom:6px;">
-          <div style="font-size:10px;color:#888;margin-bottom:4px;">${caption}${photo.credit ? ' — ' + photo.credit : ''}</div>`;
-}
-
-function routeRows(route) {
-  const rows = [];
-  if (route) {
-    if (route.type) rows.push(['Type', route.type]);
-    if (route.registration) rows.push(['Registration', route.registration]);
-    if (route.manufacturer) rows.push(['Manufacturer', route.manufacturer]);
-  }
-  return rows;
+  return `<img class="pop-photo" src="${esc(photo.url)}" alt="">
+          <div class="pop-credit">${caption}${photo.credit ? ' — ' + esc(photo.credit) : ''}</div>`;
 }
 
 function popupContent(a) {
-  const rows = [
-    ['Callsign', (a.flight || '').trim() || '—'],
-    ['Hex', a.hex],
-    ...routeRows(a.route),
-    ['Altitude', a.alt_baro != null ? `${a.alt_baro} ft` : '—'],
-    ['Ground speed', a.gs != null ? `${a.gs} kt` : '—'],
-    ['Heading', a.track != null ? `${Math.round(a.track)}°` : '—'],
-    ['Vert. rate', (a.vert_rate ?? a.baro_rate) != null ? `${a.vert_rate ?? a.baro_rate} ft/min` : '—'],
-    ['Squawk', a.squawk || '—'],
-    ['Category', a.category || '—'],
-  ];
-  if (receiverPos && a.lat != null && a.lon != null) {
-    rows.push(['Range', `${distanceKm(receiverPos[0], receiverPos[1], a.lat, a.lon).toFixed(1)} km`]);
-  }
-  rows.push(['Signal', a.rssi != null ? `${a.rssi} dBFS` : '—']);
-  const title = (a.flight || '').trim() || a.hex;
-  return `${photoBlockHtml(a.photo)}<b>${title}</b><br>` + rows.map(([k, v]) => `${k}: ${v}`).join('<br>');
+  const r = a.route || {}, rng = rangeOf(a), vr = a.vert_rate ?? a.baro_rate;
+  const more = [['Hex', a.hex], ['Manufacturer', r.manufacturer], ['Vert. rate', vr != null ? `${vr} ft/min` : null],
+                ['Squawk', a.squawk], ['Category', a.category], ['Signal', a.rssi != null ? `${a.rssi} dBFS` : null]]
+    .filter(([, v]) => v != null && v !== '');
+  return `${photoBlockHtml(a.photo)}
+    <div class="pop-h"><b>${esc((a.flight || '').trim() || a.hex)}</b><span class="mono">${esc(r.registration || '')}</span></div>
+    <div class="pop-sub">${esc([r.type, rng != null ? rng.toFixed(1) + ' km' : null].filter(Boolean).join(' · ') || '—')}</div>
+    <div class="pop-grid"><div><span>ALT</span><b>${esc(fmtAlt(a.alt_baro))}</b></div>
+      <div><span>GS</span><b>${a.gs != null ? Math.round(a.gs) : '—'}</b></div>
+      <div><span>HDG</span><b>${a.track != null ? String(Math.round(a.track)).padStart(3, '0') : '—'}</b></div></div>
+    <div class="pop-more">${more.map(([k, v]) => `<span>${k}</span><span class="mono">${esc(v)}</span>`).join('')}</div>
+    <div class="pop-btns"><a class="btn primary" href="/?at=${Math.floor(pb.now - 900)}&hex=${encodeURIComponent(a.hex)}" title="Replay the last 15 minutes">Replay</a>
+      <a class="btn" href="/fleet?hex=${encodeURIComponent(a.hex)}" target="_blank">History</a></div>`;
 }
 
 function closestPopupContent(entry) {
-  const rows = [
-    ['Callsign', entry.flight],
-    ['Hex', entry.hex],
-    ...routeRows(entry.route),
-    ['Closest approach', `${entry.range_km.toFixed(2)} km`],
-    ['Altitude then', entry.alt_baro != null ? `${entry.alt_baro} ft` : '—'],
-    ['When', entry.seen_at ? new Date(entry.seen_at * 1000).toLocaleString() : '—'],
-  ];
-  return `${photoBlockHtml(entry.photo)}<b>${entry.flight}</b><br>` + rows.map(([k, v]) => `${k}: ${v}`).join('<br>');
+  const r = entry.route || {};
+  const rows = [['Hex', entry.hex], ['Type', r.type], ['Registration', r.registration], ['Manufacturer', r.manufacturer],
+                ['Closest approach', `${entry.range_km.toFixed(2)} km`], ['Altitude then', fmtAlt(entry.alt_baro)],
+                ['When', entry.seen_at ? new Date(entry.seen_at * 1000).toLocaleString() : '—']].filter(([, v]) => v != null);
+  return `${photoBlockHtml(entry.photo)}<div class="pop-h"><b>${esc(entry.flight)}</b></div>
+    <div class="pop-more">${rows.map(([k, v]) => `<span>${k}</span><span class="mono">${esc(v)}</span>`).join('')}</div>
+    <div class="pop-btns"><a class="btn primary" href="/?at=${Math.floor(entry.seen_at - 300)}&hex=${encodeURIComponent(entry.hex)}">Replay</a>
+      <a class="btn" href="/fleet?hex=${encodeURIComponent(entry.hex)}" target="_blank">History</a></div>`;
+}
+
+function focusLive(hex) {
+  const m = markers[hex];
+  if (!m) return false;
+  if (isPhone()) { selectCard(hex, true); map.flyTo(m.getLatLng(), Math.max(map.getZoom(), 10)); return true; }
+  map.flyTo(m.getLatLng(), Math.max(map.getZoom(), 10));
+  m.openPopup();
+  return true;
+}
+
+const byRange = () => liveAircraft.map(a => ({ a, rng: rangeOf(a) })).sort((x, y) => (x.rng ?? 1e9) - (y.rng ?? 1e9));
+function renderTraffic() {
+  const list = byRange();
+  $('traffic-n').textContent = pb.active ? 'live feed · replaying' : `${list.length} · by range`;
+  $('traffic-list').innerHTML = list.length ? list.map(({ a, rng }) => {
+    const r = a.route || {};
+    const sub = [r.type || r.registration, fmtAlt(a.alt_baro), a.gs != null ? `${Math.round(a.gs)} kt` : null].filter(Boolean).join(' · ');
+    return `<div class="tr" data-hex="${esc(a.hex)}"><span class="dot" style="background:${altColor(a.alt_baro)}"></span>
+      <div style="min-width:0"><div class="cs">${esc((a.flight || '').trim() || a.hex)}</div><div class="sub">${esc(sub)}</div></div>
+      <div class="rng">${rng != null ? fmtKm(rng) + ' km' : '—'}</div></div>`;
+  }).join('') : '<div class="empty">No aircraft in range right now.</div>';
+}
+$('traffic-list').onclick = e => {
+  const row = e.target.closest('.tr');
+  if (row && !pb.active) { document.body.classList.remove('side-open'); focusLive(row.dataset.hex); }
+};
+
+// ---- phone: swipeable selected-aircraft cards (live mode) ----------------
+const isPhone = () => matchMedia('(max-width: 700px)').matches;
+let selHex = null, selRing = null, cardScrollT = null, cardTouch = false;
+function cardHtml({ a, rng }, sel) {
+  const r = a.route || {}, ph = a.photo && /^https?:\/\//.test(a.photo.url || '') ? a.photo.url : '';
+  return `<article class="acard${sel ? ' sel' : ''}" data-hex="${esc(a.hex)}">
+    <div class="ah"><div class="ph" ${ph ? `style="background-image:url('${esc(ph).replace(/'/g, '%27')}')"` : ''}></div>
+      <div style="min-width:0;flex:1"><div class="cs">${esc((a.flight || '').trim() || a.hex)}</div>
+      <div class="sub">${esc([r.registration, r.type, r.manufacturer].filter(Boolean).join(' · ') || a.hex)}</div></div></div>
+    <div class="st"><div><span>Alt</span><b style="font-weight:400;color:${altColor(a.alt_baro)}">${esc(fmtAlt(a.alt_baro))}</b></div>
+      <div><span>GS</span>${a.gs != null ? Math.round(a.gs) : '—'}</div>
+      <div><span>Hdg</span>${a.track != null ? String(Math.round(a.track)).padStart(3, '0') : '—'}</div>
+      <div><span>Range</span>${rng != null ? fmtKm(rng) : '—'}</div></div>
+    <div style="font-size:12px">${esc([a.squawk ? 'Squawk ' + a.squawk : null, a.hex].filter(Boolean).join(' · '))}</div>
+    <div class="btns"><a href="/fleet?hex=${encodeURIComponent(a.hex)}">Passes</a>
+      <a href="/?at=${Math.floor(pb.now - 900)}&hex=${encodeURIComponent(a.hex)}">Replay</a>
+      <button data-close="1">Close</button></div></article>`;
+}
+function renderCards(scroll) {
+  const box = $('cards'), list = byRange(), i = list.findIndex(x => x.a.hex === selHex);
+  if (i < 0) selHex = null;
+  const on = selHex && !pb.active && isPhone();
+  box.hidden = !on;
+  document.body.classList.toggle('cards-on', !!on);
+  if (selRing) { map.removeLayer(selRing); selRing = null; }
+  if (!on) return;
+  selRing = L.circleMarker([list[i].a.lat, list[i].a.lon], { radius: 17, color: '#F2F5F9', weight: 1.5, fill: false, interactive: false }).addTo(map);
+  $('card-n').textContent = `${i + 1} / ${list.length}`;
+  $('card-prev').disabled = i === 0;
+  $('card-next').disabled = i === list.length - 1;
+  if (cardTouch || cardScrollT) return;  // don't rebuild under the user's finger
+  const track = $('card-track');
+  track.innerHTML = list.map((x, k) => cardHtml(x, k === i)).join('');
+  if (scroll !== false) track.scrollTo({ left: track.children[i].offsetLeft - 16, behavior: scroll === 'smooth' ? 'smooth' : 'auto' });
+}
+function selectCard(hex, scroll) {
+  selHex = hex;
+  renderCards(scroll);
+}
+$('card-track').addEventListener('touchstart', () => { cardTouch = true; }, { passive: true });
+$('card-track').addEventListener('touchend', () => { cardTouch = false; }, { passive: true });
+$('card-track').addEventListener('scroll', () => {
+  clearTimeout(cardScrollT);
+  cardScrollT = setTimeout(() => {
+    cardScrollT = null;
+    const track = $('card-track'), kids = [...track.children];
+    if (!kids.length) return;
+    const k = kids.reduce((best, c, j) => Math.abs(c.offsetLeft - 16 - track.scrollLeft) < Math.abs(kids[best].offsetLeft - 16 - track.scrollLeft) ? j : best, 0);
+    const hex = kids[k].dataset.hex;
+    if (hex !== selHex && markers[hex]) { selectCard(hex, false); map.panTo(markers[hex].getLatLng()); }
+  }, 150);
+}, { passive: true });
+$('card-track').onclick = e => { if (e.target.closest('[data-close]')) selectCard(null); };
+function stepCard(d) {
+  const list = byRange(), i = list.findIndex(x => x.a.hex === selHex), n = list[i + d];
+  if (!n) return;
+  selectCard(n.a.hex, 'smooth');
+  map.panTo([n.a.lat, n.a.lon]);
+}
+$('card-prev').onclick = () => stepCard(-1);
+$('card-next').onclick = () => stepCard(1);
+$('fab-side').onclick = () => document.body.classList.add('side-open');
+$('side-close').onclick = () => document.body.classList.remove('side-open');
+
+function updateLiveTrail(a, now) {
+  const tr = trails[a.hex] ||= { pts: [], line: L.polyline([], { weight: 2, opacity: .6, interactive: false }).addTo(map) };
+  const last = tr.pts[tr.pts.length - 1];
+  if (!last || last[1] !== a.lat || last[2] !== a.lon) tr.pts.push([now, a.lat, a.lon]);
+  tr.pts = tr.pts.filter(p => p[0] >= now - TRAIL_S);
+  tr.line.setLatLngs(tr.pts.map(p => [p[1], p[2]])).setStyle({ color: altColor(a.alt_baro) });
+}
+
+function clearLive() {
+  for (const m of Object.values(markers)) map.removeLayer(m);
+  for (const t of Object.values(trails)) map.removeLayer(t.line);
+  markers = {};
+  for (const hex of Object.keys(trails)) delete trails[hex];
 }
 
 async function poll() {
   try {
-    const res = await fetch('/aircraft.json');
-    const data = await res.json();
+    const data = await fetchJson('/aircraft.json');
+    pb.now = data.server_now;
+    syncSlider();
     updateHealth(data);
-    if (!map && data.receiver) initMap(data.receiver.lat, data.receiver.lon);
+    if (!map && data.receiver) { initMap(data.receiver.lat, data.receiver.lon); loadHist(); if (focusAt) startDeepLink(); }
+    liveAircraft = (data.aircraft || []).filter(a => a.lat != null && a.lon != null);
+    setNowKpi();
+    if (map) renderTraffic();
     if (!map || pb.active) { setTimeout(poll, 2000); return; }
 
     const seen = new Set();
-    for (const a of data.aircraft) {
-      if (a.lat == null || a.lon == null) continue;
+    for (const a of liveAircraft) {
       seen.add(a.hex);
       const label = (a.flight || '').trim() || a.hex;
       if (markers[a.hex]) {
         markers[a.hex].setLatLng([a.lat, a.lon]);
-        markers[a.hex].setIcon(planeIcon(a.track, label));
+        markers[a.hex].setIcon(planeIcon(a.track, label, a.alt_baro));
       } else {
-        markers[a.hex] = L.marker([a.lat, a.lon], { icon: planeIcon(a.track, label) }).addTo(map);
+        const hex = a.hex;
+        markers[hex] = L.marker([a.lat, a.lon], { icon: planeIcon(a.track, label, a.alt_baro) }).addTo(map)
+          .on('click', () => { if (isPhone()) selectCard(hex, true); });
       }
-      markers[a.hex].bindPopup(popupContent(a));
+      if (isPhone()) markers[a.hex].unbindPopup();  // phone: the card strip replaces popups
+      else markers[a.hex].bindPopup(popupContent(a), { maxWidth: 280 });
+      updateLiveTrail(a, data.server_now);
 
-      if (focusHex && !focusedLive && a.hex.toLowerCase() === focusHex.toLowerCase()) {
+      if (focusHex && !focusAt && !focusedLive && a.hex.toLowerCase() === focusHex.toLowerCase()) {
         focusedLive = true;
         map.flyTo([a.lat, a.lon], 11);
-        markers[a.hex].openPopup();
+        if (isPhone()) selHex = a.hex; else markers[a.hex].openPopup();
       }
     }
     for (const hex of Object.keys(markers)) {
       if (!seen.has(hex)) { map.removeLayer(markers[hex]); delete markers[hex]; }
     }
-    document.getElementById('count').textContent = seen.size;
+    for (const hex of Object.keys(trails)) {
+      if (!seen.has(hex)) { map.removeLayer(trails[hex].line); delete trails[hex]; }
+    }
+    $('pb-note').textContent = `${seen.size} aircraft`;
+    $('m-mode').textContent = selHex && isPhone() ? `LIVE · following ${(liveAircraft.find(a => a.hex === selHex)?.flight || selHex).trim()}` : `LIVE · ${seen.size} aircraft`;
+    renderCards();
   } catch (e) { showWarn(['Cannot reach the map server.']); }
   setTimeout(poll, 2000);
 }
 
 async function pollClosest() {
   try {
-    const res = await fetch('/closest.json');
-    const data = await res.json();
-    const list = document.getElementById('closest-list');
-    list.innerHTML = data.leaderboard.map((r, i) =>
-      `<li style="cursor:pointer;text-decoration:underline dotted;" data-i="${i}">${r.flight} — ${r.range_km.toFixed(2)} km (${r.alt_baro ?? '?'} ft)</li>`
-    ).join('');
-    list.querySelectorAll('li').forEach(li => {
-      li.onclick = () => {
-        const entry = data.leaderboard[+li.dataset.i];
-        if (!map || entry.lat == null || entry.lon == null) return;
-        map.flyTo([entry.lat, entry.lon], 10);
-        L.popup({ maxWidth: 280 }).setLatLng([entry.lat, entry.lon]).setContent(closestPopupContent(entry)).openOn(map);
-      };
-    });
+    const data = await fetchJson('/closest.json');
+    const list = $('closest-list');
+    list.innerHTML = data.leaderboard.length ? data.leaderboard.map((r, i) =>
+      `<div class="tr" data-i="${i}"><span class="dot" style="background:${altColor(r.alt_baro)}"></span>
+        <div style="min-width:0"><div class="cs">${esc(r.flight)}</div><div class="sub">${esc(fmtAlt(r.alt_baro))}${r.seen_at ? ' · ' + esc(new Date(r.seen_at * 1000).toLocaleDateString()) : ''}</div></div>
+        <div class="rng">${r.range_km.toFixed(2)} km</div></div>`
+    ).join('') : '<div class="empty">Nothing logged yet.</div>';
+    list.onclick = e => {
+      const row = e.target.closest('.tr');
+      if (!row) return;
+      const entry = data.leaderboard[+row.dataset.i];
+      if (!map || entry.lat == null || entry.lon == null) return;
+      map.flyTo([entry.lat, entry.lon], 10);
+      L.popup({ maxWidth: 280 }).setLatLng([entry.lat, entry.lon]).setContent(closestPopupContent(entry)).openOn(map);
+    };
   } catch (e) { /* keep trying */ }
   setTimeout(pollClosest, 15000);
+}
+
+// ---- KPI strip --------------------------------------------------------------
+let hourBuckets = null;  // last hour, 12 x 5 min: [aircraft, positions, max km, min km]
+function sparkHtml(vals, color) {
+  const max = Math.max(1e-9, ...vals.map(v => v || 0));
+  return vals.map(v => `<span style="height:${v ? Math.max(6, v / max * 100) : 4}%;background:${color}"></span>`).join('');
+}
+function setKpi(id, value, detail, vals, color) {
+  const el = $(id);
+  el.querySelector('.v').textContent = value;
+  el.querySelector('.d').textContent = detail;
+  el.querySelector('.d').title = detail;
+  if (vals) el.querySelector('.spark').innerHTML = sparkHtml(vals, color);
+}
+function setNowKpi() {
+  const n = liveAircraft.length;
+  let d = 'live';
+  if (hourBuckets && hourBuckets[0][1]) { const diff = n - hourBuckets[0][0]; d = `${diff >= 0 ? '+' : ''}${diff} vs 1h`; }
+  setKpi('k-now', String(n), d, hourBuckets && hourBuckets.map(b => b[0]), '#8B7CFF');
+  $('k-now').querySelector('.d').style.color = d.startsWith('+') && d !== '+0 vs 1h' ? '#5BD08A' : '';
+}
+async function loadKpis() {
+  try {
+    const now = pb.now || Date.now() / 1000, midnight = new Date().setHours(0, 0, 0, 0) / 1000;
+    const [hr, day] = await Promise.all([fetchJson(`activity.json?from=${now - 3600}&to=${now}&n=12`),
+                                         fetchJson(`activity.json?from=${midnight}&to=${now}&n=12`)]);
+    hourBuckets = hr.buckets;
+    setNowKpi();
+    const b = day.buckets, name = x => x ? (x.flight || '').trim() || x.hex : '';
+    setKpi('k-seen', day.seen.toLocaleString(), 'since midnight', b.map(x => x[0]), '#4FD1E8');
+    setKpi('k-far', day.farthest ? `${fmtKm(day.farthest.km)} km` : '—', name(day.farthest), b.map(x => x[2]), '#8B7CFF');
+    setKpi('k-near', day.closest ? `${fmtKm(day.closest.km)} km` : '—', name(day.closest), b.map(x => x[3]), '#F5A65B');
+    setKpi('k-pos', b.reduce((s, x) => s + x[1], 0).toLocaleString(), '~1/min/aircraft', b.map(x => x[1]), '#E8689A');
+  } catch (e) { /* next round */ }
+  setTimeout(loadKpis, 60000);
 }
 
 // ---- feed / alert health -------------------------------------------------
@@ -243,7 +627,7 @@ function ago(sec) {
 }
 
 function showWarn(problems) {
-  const el = document.getElementById('warn');
+  const el = $('warn');
   el.hidden = !problems.length;
   el.replaceChildren(...problems.map(p => Object.assign(document.createElement('div'), { textContent: p })));
 }
@@ -258,21 +642,37 @@ function updateHealth(data) {
     const since = data.feed.last_ok ? ` for ${ago(now - data.feed.last_ok)}` : '';
     problems.push(`Aircraft feed is down${since}: ${data.feed.error || 'no data yet'}`);
   }
-  const al = data.alerts;
-  if (al && al.last_error_at && al.last_error_at > (al.last_ok || 0)) {
-    problems.push(`Discord alerts are failing: ${al.last_error}`);
-  }
+  const al = data.alerts, failing = al && al.last_error_at && al.last_error_at > (al.last_ok || 0);
+  if (failing) problems.push(`Discord alerts are failing: ${al.last_error}`);
   showWarn(problems);
-  const h = document.getElementById('health');
+  const h = $('health');
   h.className = problems.length ? 'bad' : '';
   h.textContent = problems.length ? '● needs attention' : '● feed OK';
+  $('fab-side').classList.toggle('bad', problems.length > 0);
+  renderAlerts(al, failing, now);
 }
 
-// ---- track playback --------------------------------------------------------
-const GAP_S = 300;    // samples further apart than this are different flights
-const TRAIL_S = 900;  // trail length behind each aircraft, in recorded time
-const pb = { active: false, tracks: [], t0: 0, t1: 0, t: 0, playing: false, last: 0, layers: new Map(), startTouched: false };
-const $ = id => document.getElementById(id);
+// Only the current Discord status exists (state.alerts); posted alerts aren't stored anywhere.
+function renderAlerts(al, failing, now) {
+  const st = $('alert-status'), body = $('alert-body');
+  const [cls, label, line] = !al ? ['', 'unknown', 'The poller has not reported alert status.']
+    : failing ? ['bad', '● Discord failing', `Last error ${ago(now - al.last_error_at)} ago: ${al.last_error}`]
+    : al.last_ok ? ['ok', '● Discord OK', `Last alert posted ${ago(now - al.last_ok)} ago.`]
+    : ['', '● no posts yet', 'No alert posted since the poller started.'];
+  st.className = cls;
+  st.textContent = label;
+  body.replaceChildren(Object.assign(document.createElement('div'), { textContent: line }),
+    Object.assign(document.createElement('div'), { className: 'note', textContent: 'Emergency squawks, military, helicopters and low, close traffic post to Discord.' }));
+}
+
+// ---- timeline: scrub back through everything the poller has logged ---------
+const GAP_S = 300;          // samples further apart than this are different flights
+const TRAIL_S = 900;        // trail length behind each aircraft, in recorded time
+const WINDOW_BEFORE_S = 1800, WINDOW_AFTER_S = 5400, EDGE_S = 300;  // history fetched around the playhead
+const HIST_N = 96, NO_DATA_MIN_S = 600;  // histogram buckets; empty runs at least this long are hatched
+const pb = { active: false, tracks: [], t: 0, now: 0, earliest: null, win: null, playing: false, last: 0,
+             layers: new Map(), dragging: false, loadSeq: 0, loading: false, focus: null };
+let hist = null;
 
 function bearingDeg(a, b) {
   const r = d => d * Math.PI / 180, dLon = r(b[2] - a[2]);
@@ -298,7 +698,8 @@ function positionAt(seg, t) {
   while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (seg[mid][0] <= t) lo = mid; else hi = mid; }
   const a = seg[lo], b = seg[hi];
   const f = b[0] === a[0] ? 0 : Math.min(1, Math.max(0, (t - a[0]) / (b[0] - a[0])));
-  const alt = a[3] != null && b[3] != null ? a[3] + (b[3] - a[3]) * f : (a[3] ?? b[3]);
+  const num = v => typeof v === 'number';
+  const alt = num(a[3]) && num(b[3]) ? a[3] + (b[3] - a[3]) * f : (a[3] ?? b[3]);
   return { lat: a[1] + (b[1] - a[1]) * f, lon: a[2] + (b[2] - a[2]) * f, alt, heading: bearingDeg(a, b) };
 }
 
@@ -311,8 +712,19 @@ function activeSegment(tr, t) {
 }
 
 function playbackPopup(tr, pos, t) {
-  return `<b>${tr.label}</b><br>Hex: ${tr.hex}<br>Altitude: ${pos.alt != null ? Math.round(pos.alt) + ' ft' : '—'}` +
-         `<br>Time: ${new Date(t * 1000).toLocaleString()}`;
+  return `<div class="pop-h"><b>${esc(tr.label)}</b><span class="mono">${esc(tr.hex)}</span></div>
+    <div class="pop-sub">${esc(new Date(t * 1000).toLocaleString())}</div>
+    <div class="pop-grid"><div><span>ALT</span><b>${esc(fmtAlt(typeof pos.alt === 'number' ? Math.round(pos.alt) : pos.alt))}</b></div>
+      <div><span>HDG</span><b>${String(Math.round(pos.heading)).padStart(3, '0')}</b></div></div>
+    <div class="pop-btns"><a class="btn" href="/fleet?hex=${encodeURIComponent(tr.hex)}" target="_blank">History</a></div>`;
+}
+
+function noDataNear(t) {
+  return !pb.tracks.some(tr => tr.segs.some(seg => seg.some(p => Math.abs(p[0] - t) < 600)));
+}
+
+function fmtWhen(t) {
+  return new Date(t * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function render() {
@@ -327,11 +739,11 @@ function render() {
     let layer = pb.layers.get(tr.hex);
     if (!layer) {
       layer = {
-        marker: L.marker([pos.lat, pos.lon], { icon: planeIcon(pos.heading, tr.label) }).addTo(map),
-        line: L.polyline(trail, { color: '#4da3ff', weight: 2, opacity: 0.7, interactive: false }).addTo(map),
+        marker: L.marker([pos.lat, pos.lon], { icon: planeIcon(pos.heading, tr.label, pos.alt) }).addTo(map),
+        line: L.polyline(trail, { color: altColor(pos.alt), weight: 2, opacity: 0.7, interactive: false }).addTo(map),
         heading: pos.heading,
       };
-      layer.marker.bindPopup(() => playbackPopup(tr, layer.pos, pb.t));
+      layer.marker.bindPopup(() => playbackPopup(tr, layer.pos, pb.t), { maxWidth: 280 });
       pb.layers.set(tr.hex, layer);
     }
     layer.pos = pos;
@@ -346,8 +758,11 @@ function render() {
   for (const [hex, layer] of pb.layers) {
     if (!seen.has(hex)) { map.removeLayer(layer.marker); map.removeLayer(layer.line); pb.layers.delete(hex); }
   }
-  $('pb-slider').value = Math.round(t - pb.t0);
-  $('pb-time').textContent = `${new Date(t * 1000).toLocaleString()} · ${seen.size} aircraft`;
+  $('pb-when').textContent = fmtWhen(t);
+  $('m-mode').textContent = `REPLAY · ${new Date(t * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`;
+  $('pb-note').textContent = seen.size ? `${seen.size} aircraft`
+    : pb.loading ? 'loading…'
+    : noDataNear(t) ? 'no data recorded' : '0 aircraft';
 }
 
 function clearPlaybackLayers() {
@@ -355,96 +770,192 @@ function clearPlaybackLayers() {
   pb.layers.clear();
 }
 
-function setPlaying(on) {
-  pb.playing = on;
-  $('pb-play').textContent = on ? '⏸' : '▶';
-  if (on) {
-    if (pb.t >= pb.t1) pb.t = pb.t0;
-    pb.last = performance.now();
-    requestAnimationFrame(tick);
+function spanStart() {
+  const span = +$('pb-span').value;
+  return span ? pb.now - span : Math.min(pb.earliest ?? pb.now - 3600, pb.now - 60);
+}
+
+function paintPast() {
+  if (!hist) return;
+  const bars = $('hist').children, frac = pb.active ? (pb.t - hist.from) / (hist.to - hist.from) : 1;
+  for (let i = 0; i < bars.length; i++) bars[i].classList.toggle('past', (i + 0.5) / bars.length <= frac);
+}
+
+function syncSlider() {
+  paintPast();
+  if (!pb.now || pb.dragging) return;
+  const start = spanStart(), slider = $('pb-slider');
+  slider.max = Math.max(1, Math.round(pb.now - start));
+  slider.value = pb.active ? Math.max(0, Math.round(pb.t - start)) : slider.max;
+}
+
+// Activity histogram under the scrubber: aircraft per bucket, hatched where nothing was logged.
+async function loadHist() {
+  if (!pb.now) return;
+  const from = spanStart(), to = pb.now;
+  try {
+    const d = await fetchJson(`activity.json?from=${from}&to=${to}&n=${HIST_N}`);
+    hist = { from, to, b: d.buckets };
+  } catch (e) { return; }
+  const b = hist.b, n = b.length, step = (to - from) / n, max = Math.max(1, ...b.map(x => x[0]));
+  $('hist').innerHTML = b.map(x => `<div style="height:${x[1] ? Math.max(6, x[0] / max * 100) : 0}%"></div>`).join('');
+  let gaps = '';
+  for (let i = 0; i < n;) {
+    if (b[i][1]) { i++; continue; }
+    let j = i;
+    while (j < n && !b[j][1]) j++;
+    if ((j - i) * step >= NO_DATA_MIN_S) {
+      gaps += `<div class="gap" style="left:${i / n * 100}%;width:${(j - i) / n * 100}%" title="Nothing logged: feed offline or no traffic">${(j - i) / n > 0.08 ? 'No data · ' + ago((j - i) * step) : ''}</div>`;
+    }
+    i = j;
   }
+  $('gaps').innerHTML = gaps;
+  $('tl-axis').innerHTML = [0, 1, 2, 3, 4].map(k => `<span>${k === 4 ? 'now' : '−' + ago((to - from) * (1 - k / 4))}</span>`).join('');
+  paintPast();
+}
+setInterval(loadHist, 60000);
+
+function needsLoad(t) {
+  return !pb.win || t < pb.win.from + EDGE_S || (t > pb.win.to - EDGE_S && pb.win.to < pb.now - 10);
+}
+
+async function loadWindow(t) {
+  const seq = ++pb.loadSeq;
+  pb.loading = true;
+  const from = t - WINDOW_BEFORE_S, to = Math.min(t + WINDOW_AFTER_S, pb.now);
+  let data = null;
+  try { data = await fetchJson(`history.json?from=${from}&to=${to}`); } catch (e) { /* treated as an empty window */ }
+  if (seq !== pb.loadSeq) return;  // the playhead moved on; a newer request owns the result
+  pb.loading = false;
+  pb.tracks = data ? data.tracks.map(tr => ({ hex: tr.hex, label: (tr.flight || '').trim() || tr.hex, segs: splitSegments(tr.pts) })) : [];
+  pb.win = { from, to: data ? data.to : to };
+  if (data && data.bounds[0]) pb.earliest = data.bounds[0];
+  if (pb.active) { render(); focusIfRequested(); }
+}
+
+// Deep link (?at=...&hex=...): centre on the requested aircraft once its track is drawn.
+function focusIfRequested() {
+  if (!pb.focus) return;
+  let layer = pb.layers.get(pb.focus);
+  if (!layer) {
+    const tr = pb.tracks.find(x => x.hex === pb.focus);
+    if (!tr) { pb.focus = null; return; }  // no logged positions for it in this window
+    const seg = tr.segs.find(sg => sg[sg.length - 1][0] >= pb.t) || tr.segs[0];
+    pb.t = seg[0][0];  // its first position can lag the first sighting by a bit
+    render();
+    syncSlider();
+    layer = pb.layers.get(pb.focus);
+  }
+  if (layer) { map.setView(layer.marker.getLatLng(), 10); layer.marker.openPopup(); }
+  pb.focus = null;
+}
+
+function enterPlayback() {
+  pb.active = true;
+  clearLive();
+  $('pb-live').className = '';
+  $('pb-live').textContent = 'Back to live';
+  document.body.classList.add('replay');
+  renderTraffic();
+  renderCards();
+}
+
+function seekTo(t) {
+  if (!map || !pb.now) return;
+  t = Math.min(t, pb.now - 20);
+  if (!pb.active) enterPlayback();
+  pb.t = t;
+  if (needsLoad(t)) loadWindow(t);
+  render();
+  syncSlider();
+}
+
+function goLive() {
+  setPlaying(false);
+  pb.loadSeq++;  // drop any in-flight history request
+  pb.loading = false;
+  if (map) clearPlaybackLayers();
+  pb.active = false;
+  $('pb-live').className = 'live';
+  $('pb-live').textContent = 'LIVE';
+  document.body.classList.remove('replay', 'tl-open');
+  $('m-mode').textContent = 'LIVE';
+  $('pb-when').textContent = 'Live';
+  $('pb-note').textContent = '';
+  syncSlider();
+}
+
+function setPlaying(on) {
+  if (on && !pb.active) seekTo(pb.now - 900);  // from live, replay the last 15 minutes
+  pb.playing = on && pb.active;
+  $('pb-play').textContent = pb.playing ? '⏸' : '▶';
+  if (pb.playing) { pb.last = performance.now(); requestAnimationFrame(tick); }
 }
 
 function tick(now) {
   if (!pb.playing) return;
-  pb.t = Math.min(pb.t1, pb.t + (now - pb.last) / 1000 * (+$('pb-speed').value));
+  pb.t += (now - pb.last) / 1000 * +$('pb-speed').value;
   pb.last = now;
+  if (pb.t >= pb.now - 10) { goLive(); return; }
+  if (!pb.loading && needsLoad(pb.t)) loadWindow(pb.t);
   render();
-  if (pb.t >= pb.t1) setPlaying(false); else requestAnimationFrame(tick);
+  syncSlider();
+  requestAnimationFrame(tick);
 }
 
-function toLocalInput(sec) {  // unix seconds -> value for <input type="datetime-local">
-  const d = new Date(sec * 1000);
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+async function loadBounds() {
+  try { const d = await fetchJson('history.json?from=0&to=0'); if (d.bounds[0]) pb.earliest = d.bounds[0]; } catch (e) { /* 'All' falls back to 1 h */ }
 }
 
-function defaultStart() { $('pb-start').value = toLocalInput(Date.now() / 1000 - +$('pb-len').value); }
-
-async function loadHistory() {
-  const startMs = new Date($('pb-start').value).getTime();
-  if (isNaN(startMs)) { $('pb-info').textContent = 'Pick a start time.'; return; }
-  const from = startMs / 1000, to = from + +$('pb-len').value;
-  setPlaying(false);
-  $('pb-info').textContent = 'Loading…';
-  try {
-    const data = await (await fetch(`history.json?from=${from}&to=${to}`)).json();
-    clearPlaybackLayers();
-    pb.tracks = data.tracks.map(tr => ({ hex: tr.hex, label: (tr.flight || '').trim() || tr.hex, segs: splitSegments(tr.pts) }));
-    pb.t0 = from; pb.t1 = Math.min(to, data.to); pb.t = pb.t0;
-    const points = data.tracks.reduce((n, tr) => n + tr.pts.length, 0);
-    const slider = $('pb-slider');
-    slider.max = Math.max(1, Math.round(pb.t1 - pb.t0));
-    slider.value = 0;
-    slider.disabled = $('pb-play').disabled = !points;
-    if (points) {
-      $('pb-info').textContent = `${pb.tracks.length} aircraft, ${points} positions`;
-      render();
-    } else {
-      const [lo, hi] = data.bounds;
-      $('pb-info').textContent = lo
-        ? `No positions in this window. Logged data runs ${new Date(lo * 1000).toLocaleString()} to ${new Date(hi * 1000).toLocaleString()}.`
-        : 'No positions have been logged yet.';
-      $('pb-time').textContent = '—';
-    }
-  } catch (e) { $('pb-info').textContent = 'Could not load history.'; }
+function setSpan(v) {
+  $('pb-span').value = v;
+  for (const b of $('pb-spans').children) b.classList.toggle('on', b.dataset.v === String(v));
+  loadHist();
 }
 
-async function jumpToLatest() {
-  try {
-    const data = await (await fetch('history.json?from=0&to=0')).json();
-    if (!data.bounds[1]) { $('pb-info').textContent = 'No positions have been logged yet.'; return; }
-    $('pb-start').value = toLocalInput(data.bounds[1] - +$('pb-len').value);
-    pb.startTouched = true;
-    loadHistory();
-  } catch (e) { $('pb-info').textContent = 'Could not load history.'; }
+async function startDeepLink() {
+  await loadBounds();
+  const t = +focusAt;
+  if (!(t > 0)) return;
+  if (t < pb.now - +$('pb-span').value) setSpan('0');
+  pb.focus = focusHex && focusHex.toLowerCase();
+  seekTo(t);
 }
 
-function setPlaybackMode(on) {
-  if (on === pb.active) return;
-  pb.active = on;
-  $('pb-toggle').classList.toggle('on', on);
-  $('playbar').hidden = !on;
-  if (on) {
-    for (const m of Object.values(markers)) map.removeLayer(m);
-    markers = {};
-    if (!pb.startTouched) defaultStart();
-  } else {
-    setPlaying(false);
-    clearPlaybackLayers();
-  }
-}
-
-$('pb-toggle').onclick = () => { if (map) setPlaybackMode(!pb.active); };
-$('pb-live').onclick = () => setPlaybackMode(false);
-$('pb-load').onclick = loadHistory;
-$('pb-latest').onclick = jumpToLatest;
 $('pb-play').onclick = () => setPlaying(!pb.playing);
-$('pb-start').onchange = () => { pb.startTouched = true; };
-$('pb-len').onchange = () => { if (!pb.startTouched) defaultStart(); };
-$('pb-slider').oninput = e => { pb.t = pb.t0 + +e.target.value; render(); };
+// While live, LIVE expands/collapses the phone timeline pill (no-op class on desktop).
+$('pb-live').onclick = () => { if (pb.active) goLive(); else document.body.classList.toggle('tl-open'); };
+$('pb-slider').onpointerdown = () => { pb.dragging = true; };
+$('pb-slider').onpointerup = $('pb-slider').onpointercancel = () => { pb.dragging = false; syncSlider(); };
+$('pb-slider').oninput = e => {
+  const t = spanStart() + +e.target.value;
+  if (t >= pb.now - 20) goLive(); else seekTo(t);
+};
+$('pb-spans').onclick = e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  setSpan(b.dataset.v);
+  if (pb.active && pb.t < spanStart()) seekTo(spanStart()); else syncSlider();
+};
+$('pb-goto').onchange = e => {
+  const t = new Date(e.target.value).getTime() / 1000;
+  if (isNaN(t)) return;
+  if (t < spanStart()) setSpan('0');
+  seekTo(t);
+};
+$('q').onkeydown = e => {
+  if (e.key !== 'Enter') return;
+  const q = e.target.value.trim().toLowerCase();
+  if (!q) return;
+  const hit = liveAircraft.find(a => [a.hex, a.flight, a.route && a.route.registration].some(v => v && v.trim().toLowerCase().includes(q)));
+  if (hit && !pb.active && focusLive(hit.hex)) return;
+  location.href = `/fleet?q=${encodeURIComponent(e.target.value.trim())}`;  // not live: search everything ever seen
+};
+loadBounds();
 
 poll();
 pollClosest();
+loadKpis();
 </script>
 </body>
 </html>

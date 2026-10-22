@@ -1,29 +1,56 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ADS-B Hub</title>
+<title>ADS-B Console · Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  body { margin: 0; height: 100vh; display: flex; flex-direction: column; font-family: system-ui, sans-serif; background: #0b0d12; color: #cfd8e3; }
-  #bar { height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 13px; }
-  #bar button { background: #11141c; color: #cfd8e3; border: 1px solid #263044; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
-  #bar button.on { background: #1d2a44; border-color: #4a6fa5; }
-  #panes { flex: 1; min-height: 0; display: flex; gap: 4px; padding: 0 4px 4px; }
-  .pane { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #11141c; border: 1px solid #263044; }
+  :root { --bg:#0B0E13; --card:#11151C; --line:#1A1F28; --line2:#1E2430; --raised:#161B24; --text:#C9D1DC; --hi:#F2F5F9; --mute:#7D8796; --dim:#5F6977; --violet:#8B7CFF; --cyan:#4FD1E8; }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column; font: 13px/1.45 Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header.top { height: 52px; flex: none; display: flex; align-items: center; gap: 20px; padding: 0 20px; border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--hi); }
+  .brand i { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--violet), var(--cyan)); }
+  nav { display: flex; gap: 2px; }
+  nav a { text-decoration: none; color: var(--mute); padding: 6px 12px; border-radius: 6px; font-weight: 500; }
+  nav a:hover { color: var(--hi); }
+  nav a.on { color: var(--hi); background: var(--raised); }
+  #bar { margin-left: auto; display: flex; gap: 6px; align-items: center; color: var(--dim); font-size: 12px; }
+  #bar button { background: transparent; color: var(--mute); border: 1px solid var(--line2); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+  #bar button.on { border-color: var(--violet); background: rgba(139,124,255,.14); color: var(--hi); }
+  #panes { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 12px 16px 16px; }
+  .pane { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
   .pane[hidden] { display: none; }
-  .pane header { flex: none; display: flex; justify-content: space-between; padding: 4px 8px; font-size: 12px; color: #8fa3c0; }
-  .pane header button { background: none; border: 0; color: inherit; cursor: pointer; font-size: 14px; }
-  .pane iframe { flex: 1; border: 0; width: 100%; }
-  .divider { flex: none; width: 6px; margin: 0 -2px; cursor: col-resize; background: #263044; border-radius: 3px; touch-action: none; }
+  .pane header { flex: none; display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; font-weight: 600; color: var(--hi); border-bottom: 1px solid var(--line); }
+  .pane header button { background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 16px; }
+  .pane header button:hover { color: var(--hi); }
+  .pane iframe { flex: 1; border: 0; width: 100%; background: var(--bg); }
+  .divider { flex: none; width: 6px; margin: 0 -4px; cursor: col-resize; background: var(--line2); border-radius: 3px; touch-action: none; }
+  .divider:hover { background: var(--violet); }
   .divider[hidden] { display: none; }
   body.dragging { cursor: col-resize; user-select: none; }
   body.dragging iframe { pointer-events: none; }
-  #empty { margin: auto; color: #5f6f88; }
+  #empty { margin: auto; color: var(--dim); }
+  @media (max-width: 700px) {
+    header.top { gap: 10px; padding: 0 12px; height: auto; min-height: 52px; flex-wrap: wrap; }
+    nav a { padding: 12px 8px; }
+    #bar { margin-left: 0; flex: 1 1 100%; padding-bottom: 8px; }
+    #bar button { min-height: 44px; flex: 1; }
+    #panes { padding: 8px; }
+    .divider { display: none; }
+    .pane { flex: 1 1 auto !important; }
+    .pane header button { width: 44px; height: 44px; }
+  }
 </style>
 </head>
 <body>
-  <div id="bar">ADS-B —</div>
+  <header class="top">
+    <div class="brand"><i></i>Console</div>
+    <nav><a href="/">Live</a><a href="/fleet">Aircraft</a><a href="/coverage/">Coverage</a><a class="on" href="/hub">Hub</a></nav>
+    <div id="bar">Windows</div>
+  </header>
   <div id="panes"><div id="empty">Open a window above.</div></div>
 <script>
 // Relative URLs so this works behind any proxy hostname.
@@ -34,6 +61,7 @@ const WINDOWS = [
 const bar = document.getElementById('bar');
 const panes = document.getElementById('panes');
 const empty = document.getElementById('empty');
+const phone = matchMedia('(max-width: 700px)');
 
 let ratio = 50;  // % of the width given to the first window when both are open
 try {
@@ -65,7 +93,11 @@ function refresh() {
 for (const w of WINDOWS) {
   w.btn = document.createElement('button');
   w.btn.textContent = w.title;
-  w.btn.onclick = () => { w.open = !w.open; refresh(); };
+  w.btn.onclick = () => {
+    // Phone width: one window at a time, the buttons act as a toggle.
+    if (phone.matches) WINDOWS.forEach(o => { o.open = o === w; }); else w.open = !w.open;
+    refresh();
+  };
   bar.appendChild(w.btn);
 
   w.pane = document.createElement('section');
@@ -87,6 +119,7 @@ divider.onpointerup = () => {
   document.body.classList.remove('dragging');
   try { localStorage.setItem('adsbHubRatio', ratio); } catch (e) {}
 };
+if (phone.matches && WINDOWS.every(w => w.open)) WINDOWS[1].open = false;
 refresh();
 
 // Keep the two Leaflet maps at the same center and zoom. Same-origin iframes,

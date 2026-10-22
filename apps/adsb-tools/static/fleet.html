@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADS-B Console · Aircraft</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#0B0E13; --card:#11151C; --line:#1A1F28; --line2:#1E2430; --raised:#161B24; --text:#C9D1DC; --hi:#F2F5F9; --mute:#7D8796; --dim:#5F6977; --faint:#4A5361;
+          --violet:#8B7CFF; --cyan:#4FD1E8; --orange:#F5A65B; --pink:#E8689A; --mono:'JetBrains Mono', ui-monospace, monospace; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 Inter, system-ui, sans-serif; display: flex; flex-direction: column; }
+  a { color: #A99BFF; } a:hover { color: #D3CBFF; }
+  button, input { font: inherit; }
+  .mono { font-family: var(--mono); }
+  header.top { height: 52px; flex: none; display: flex; align-items: center; gap: 20px; border-bottom: 1px solid var(--line); padding: 0 20px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--hi); }
+  .brand i { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--violet), var(--cyan)); }
+  nav { display: flex; gap: 2px; }
+  nav a { text-decoration: none; color: var(--mute); padding: 6px 12px; border-radius: 6px; font-weight: 500; }
+  nav a:hover { color: var(--hi); }
+  nav a.on { color: var(--hi); background: var(--raised); }
+  #warn { flex: none; background: #3A1420; border-bottom: 1px solid rgba(232,104,154,.4); padding: 10px 20px; display: flex; gap: 10px; align-items: center; color: #FFD0DE; font-size: 13px; }
+  #warn[hidden] { display: none; }
+  #warn a { flex: none; min-height: 36px; padding: 0 12px; border-radius: 10px; background: var(--pink); color: var(--bg); font-weight: 600; display: flex; align-items: center; text-decoration: none; }
+
+  #wrap { flex: 1; min-height: 0; display: flex; }
+  main { flex: 1 1 640px; min-width: 0; display: flex; flex-direction: column; padding: 20px 20px 16px; gap: 14px; }
+  .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .bar h1 { font-size: 20px; font-weight: 600; color: var(--hi); margin: 0; }
+  #summary { font-family: var(--mono); font-size: 12px; color: var(--mute); }
+  .search { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--line2); border-radius: 8px; padding: 6px 10px; width: 300px; margin-left: auto; }
+  .search input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--hi); font-size: 12px; }
+  .chips { display: flex; gap: 6px; }
+  .chips button { padding: 5px 10px; border-radius: 6px; font-size: 12px; border: 1px solid var(--line2); background: transparent; color: var(--mute); cursor: pointer; }
+  .chips button.on { border-color: var(--violet); background: rgba(139,124,255,.14); color: var(--hi); }
+  #sortbtn { display: none; }
+
+  .tablecard { flex: 1; min-height: 0; background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 9px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--raised); }
+  th { position: sticky; top: 0; background: var(--card); color: var(--dim); font-weight: 500; font-size: 12px; cursor: pointer; user-select: none; z-index: 1; border-bottom-color: var(--line); }
+  th.sorted { color: var(--hi); }
+  th.sorted::after { content: attr(data-arrow); margin-left: 4px; }
+  td.num, th.num { text-align: right; }
+  td.num { font-family: var(--mono); font-size: 12px; }
+  tr.row { cursor: pointer; }
+  tr.row:hover td { background: #141922; }
+  tr.row.sel td { background: var(--raised); }
+  tr.row.sel td:first-child { box-shadow: inset 2px 0 0 var(--violet); }
+  .tail { display: flex; align-items: center; gap: 8px; }
+  .tail b { font-family: var(--mono); color: var(--hi); font-weight: 500; }
+  .tail .hex { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .tail .ty { display: none; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .calls { font-family: var(--mono); font-size: 12px; color: var(--mute); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+  .dim { color: var(--dim); }
+  #more { display: block; margin: 14px auto; background: var(--raised); color: var(--text); border: 1px solid var(--line2); border-radius: 8px; padding: 6px 16px; cursor: pointer; }
+  #more[hidden], #status[hidden], table[hidden] { display: none; }
+  #status { padding: 20px; color: var(--mute); }
+
+  aside { width: 380px; flex: none; border-left: 1px solid var(--line); background: #0E1219; display: flex; flex-direction: column; overflow: auto; }
+  aside[hidden] { display: none; }
+  .d-pad { padding: 18px 20px 0; }
+  .d-top { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--dim); }
+  #d-close { background: none; border: 0; color: var(--dim); font-size: 18px; cursor: pointer; width: 36px; height: 36px; border-radius: 18px; }
+  #d-close:hover { color: var(--hi); background: var(--raised); }
+  .d-title { margin-top: 6px; display: flex; align-items: baseline; gap: 10px; }
+  .d-title b { font-size: 26px; font-weight: 600; color: var(--hi); font-family: var(--mono); }
+  .d-title span { font-family: var(--mono); font-size: 12px; color: var(--mute); }
+  .d-sub { color: var(--mute); }
+  .photo { margin-top: 14px; height: 140px; border-radius: 12px; background: linear-gradient(135deg, #1A1A33, #10202A) center / cover no-repeat; position: relative; overflow: hidden; }
+  .photo span { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: var(--hi); background: rgba(11,14,19,.7); padding: 1px 6px; border-radius: 4px; }
+  .facts { margin-top: 14px; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+  .facts div { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+  .facts span { display: block; font-size: 11px; color: var(--dim); }
+  .facts b { color: var(--hi); font-weight: 600; font-size: 15px; }
+  .h-head { margin-top: 16px; display: flex; justify-content: space-between; font-size: 12px; }
+  .h-head b { color: var(--hi); font-weight: 600; }
+  .h-head span { color: var(--dim); }
+  .hours { margin-top: 8px; height: 40px; display: flex; align-items: flex-end; gap: 2px; }
+  .hours span { flex: 1; min-height: 2px; border-radius: 1px; background: var(--violet); }
+  .h-axis { display: flex; justify-content: space-between; font: 10px var(--mono); color: var(--faint); margin-top: 3px; }
+  .passes { margin-top: 16px; border-top: 1px solid var(--line); }
+  .passes h3 { margin: 0; padding: 12px 20px 6px; font-size: 12px; color: var(--hi); font-weight: 600; }
+  .pass { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; padding: 8px 20px; border-bottom: 1px solid var(--raised); align-items: center; }
+  .pass .w { color: var(--hi); }
+  .pass .m { color: var(--dim); font-size: 12px; font-family: var(--mono); }
+  .pass a { text-decoration: none; font-size: 12px; background: var(--line2); color: var(--text); border-radius: 6px; padding: 5px 10px; white-space: nowrap; }
+  .pass a:hover { color: var(--hi); background: #2A3140; }
+
+  @media (max-width: 700px) {
+    header.top { display: none; }
+    #warn { padding: 10px 16px; }
+    #warn a { min-height: 44px; }
+    main { padding: 10px 0 0; gap: 8px; }
+    .bar { padding: 0 8px 0 16px; gap: 8px; }
+    .bar h1 { font-size: 22px; flex: 1; }
+    #summary { display: none; }
+    #sortbtn, #mapbtn { display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); color: var(--hi); font-size: 13px; text-decoration: none; }
+    #mapbtn { width: 44px; padding: 0; border-radius: 22px; }
+    .search { order: 5; width: auto; flex: 1 1 100%; margin: 0 8px 0 0; padding: 10px 12px; }
+    .search input { font-size: 16px; }  /* no iOS zoom-on-focus */
+    .chips { order: 6; flex: 1 1 100%; overflow-x: auto; }
+    .chips button { min-height: 44px; padding: 0 14px; border-radius: 10px; }
+    .tablecard { border-radius: 0; border-left: 0; border-right: 0; }
+    th, td { padding: 0 8px; height: 56px; }
+    th { height: 32px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    th:first-child, td:first-child { padding-left: 16px; }
+    th:last-child, td:last-child { padding-right: 16px; }
+    .col-x { display: none; }
+    .tail { flex-wrap: wrap; row-gap: 0; }
+    .tail .hex { display: none; }
+    .tail .ty { display: block; flex-basis: 100%; padding-left: 16px; font-size: 12px; color: var(--mute); }
+    aside { position: fixed; inset: 0; width: auto; z-index: 10; border: 0; background: var(--bg); padding-bottom: 20px; }
+    #d-close { width: 44px; height: 44px; border-radius: 22px; background: var(--card); border: 1px solid var(--line); }
+    .pass a { min-height: 44px; display: flex; align-items: center; padding: 0 14px; border-radius: 22px; color: var(--cyan); font-size: 13px; }
+    .pass { padding: 8px 16px; }
+    .d-pad { padding: 12px 16px 0; }
+  }
+  @media (min-width: 701px) { #mapbtn { display: none; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><i></i>Console</div>
+  <nav><a href="/">Live</a><a class="on" href="/fleet">Aircraft</a><a href="/coverage/">Coverage</a><a href="/hub">Hub</a></nav>
+</header>
+<div id="warn" role="alert" hidden><div style="flex:1"><b id="warn-title"></b><br><span id="warn-text"></span></div><a href="/">Status</a></div>
+<div id="wrap">
+  <main>
+    <div class="bar">
+      <h1>Aircraft</h1>
+      <span id="summary"></span>
+      <label class="search">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#5F6977" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        <input id="q" type="search" placeholder="Filter by tail, hex, type or callsign" aria-label="Filter aircraft">
+      </label>
+      <div class="chips" id="chips"><button data-f="all" class="on">All</button><button data-f="tail">Tail known</button><button data-f="today">Today</button></div>
+      <button id="sortbtn"></button>
+      <a id="mapbtn" href="/" aria-label="Close list, back to map"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#E6EAF0" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></a>
+    </div>
+    <div class="tablecard">
+      <div id="status">Loading…</div>
+      <table id="tbl" hidden>
+        <thead><tr id="head"></tr></thead>
+        <tbody id="body"></tbody>
+      </table>
+      <button id="more" hidden></button>
+    </div>
+  </main>
+  <aside id="drawer" hidden aria-label="Aircraft detail"></aside>
+</div>
+<script>
+const PAGE = 200;
+// m: shown at phone width too.
+const COLS = [
+  { key: 'tail', label: 'Tail', m: true, get: a => a.tail || '' },
+  { key: 'type', label: 'Type', get: a => a.type || '' },
+  { key: 'manufacturer', label: 'Manufacturer', get: a => a.manufacturer || '' },
+  { key: 'callsigns', label: 'Callsigns', get: a => (a.callsigns[0] || [''])[0] },
+  { key: 'sessions', label: 'Passes', m: true, num: true, get: a => a.sessions },
+  { key: 'days', label: 'Days', m: true, num: true, get: a => a.days },
+  { key: 'airtime_s', label: 'In range', num: true, get: a => a.airtime_s },
+  { key: 'first_seen', label: 'First seen', get: a => a.first_seen },
+  { key: 'last_seen', label: 'Last seen', get: a => a.last_seen },
+  { key: 'max_alt', label: 'Ceiling', num: true, get: a => a.max_alt ?? -1 },
+  { key: 'max_gs', label: 'Max speed', num: true, get: a => a.max_gs ?? -1 },
+  { key: 'closest_km', label: 'Closest', m: true, num: true, get: a => a.closest_km ?? Infinity },
+];
+const MOBILE_SORTS = ['last_seen', 'closest_km', 'sessions', 'days', 'tail'];
+const params = new URLSearchParams(location.search);
+let rows = [], sortKey = 'last_seen', sortDir = -1, shown = PAGE, filter = 'all', selHex = (params.get('hex') || '').toLowerCase();
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
+const altColor = alt => typeof alt !== 'number' ? '#7D8796' : alt < 6000 ? '#F5A65B' : alt < 15000 ? '#E8689A' : alt < 30000 ? '#8B7CFF' : '#4FD1E8';
+const fmtTime = ts => {
+  if (!ts) return '—';
+  const d = new Date(ts * 1000), t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
+  return days === 0 ? `Today ${t}` : days === 1 ? `Yesterday ${t}` : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+};
+const fmtDur = s => s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`;
+const fmtAlt = v => v == null ? '—' : v >= 18000 ? 'FL' + Math.round(v / 100) : `${Math.round(v).toLocaleString()} ft`;
+const fmtSpd = v => v == null ? '—' : `${Math.round(v)} kt`;
+const fmtKm = v => v == null ? '—' : `${v.toFixed(2)} km`;
+
+function cell(a, c) {
+  const td = el('td', null, (c.num ? 'num ' : '') + (c.m ? '' : 'col-x'));
+  switch (c.key) {
+    case 'tail': {
+      const w = el('div', null, 'tail');
+      const dot = el('span', null, 'dot'); dot.style.background = altColor(a.max_alt);
+      w.append(dot, a.tail ? el('b', a.tail) : el('b', '—', 'dim'), el('span', a.hex, 'hex'), el('span', a.type || a.hex, 'ty'));
+      td.append(w); break;
+    }
+    case 'type': case 'manufacturer': td.textContent = a[c.key] || '—'; if (!a[c.key]) td.classList.add('dim'); break;
+    case 'callsigns': {
+      const s = el('div', a.callsigns.map(([f, n]) => n > 1 ? `${f} ×${n}` : f).join(', ') || '—', 'calls');
+      s.title = s.textContent; td.append(s); break;
+    }
+    case 'airtime_s': td.textContent = fmtDur(a.airtime_s); break;
+    case 'first_seen': case 'last_seen': td.textContent = fmtTime(a[c.key]); td.classList.add('dim'); break;
+    case 'max_alt': td.textContent = fmtAlt(a.max_alt); break;
+    case 'max_gs': td.textContent = fmtSpd(a.max_gs); break;
+    case 'closest_km': td.textContent = fmtKm(a.closest_km); break;
+    default: td.textContent = a[c.key];
+  }
+  return td;
+}
+
+function visibleRows() {
+  const q = $('q').value.trim().toLowerCase(), midnight = new Date().setHours(0, 0, 0, 0) / 1000;
+  let list = rows;
+  if (filter === 'tail') list = list.filter(a => a.tail);
+  if (filter === 'today') list = list.filter(a => a.last_seen >= midnight);
+  if (q) list = list.filter(a => [a.tail, a.hex, a.type, a.manufacturer, ...a.callsigns.map(c => c[0])].some(v => v && v.toLowerCase().includes(q)));
+  const col = COLS.find(c => c.key === sortKey);
+  return [...list].sort((x, y) => {
+    const a = col.get(x), b = col.get(y);
+    return (a < b ? -1 : a > b ? 1 : 0) * sortDir || (y.last_seen - x.last_seen);
+  });
+}
+
+function setSort(key) {
+  const c = COLS.find(x => x.key === key);
+  sortDir = key === sortKey ? -sortDir : (c.num || key.endsWith('_seen') ? -1 : 1);
+  if (key === 'closest_km' && key !== sortKey) sortDir = 1;
+  sortKey = key; shown = PAGE; render();
+}
+
+function renderHead() {
+  $('head').replaceChildren(...COLS.map(c => {
+    const th = el('th', c.label, [c.num ? 'num' : '', c.m ? '' : 'col-x', c.key === sortKey ? 'sorted' : ''].join(' '));
+    th.dataset.arrow = sortDir < 0 ? '↓' : '↑';
+    th.onclick = () => setSort(c.key);
+    return th;
+  }));
+  const c = COLS.find(x => x.key === sortKey);
+  $('sortbtn').textContent = `Sort: ${c.label} ${sortDir < 0 ? '↓' : '↑'}`;
+}
+
+function render() {
+  renderHead();
+  const list = visibleRows();
+  $('body').replaceChildren(...list.slice(0, shown).map(a => {
+    const tr = el('tr', null, 'row' + (a.hex === selHex ? ' sel' : ''));
+    COLS.forEach(c => tr.append(cell(a, c)));
+    tr.onclick = () => openDetail(a.hex);
+    return tr;
+  }));
+  const more = $('more');
+  more.hidden = list.length <= shown;
+  more.textContent = `Show ${Math.min(PAGE, list.length - shown)} more (${list.length - shown} left)`;
+  const withTail = rows.filter(a => a.tail).length, obs = rows.reduce((n, a) => n + a.sessions, 0);
+  $('summary').textContent =
+    `${list.length === rows.length ? rows.length.toLocaleString() : `${list.length.toLocaleString()} of ${rows.length.toLocaleString()}`} aircraft · ${withTail.toLocaleString()} with tail · ${obs.toLocaleString()} passes`;
+}
+
+async function openDetail(hex) {
+  selHex = hex;
+  history.replaceState(null, '', `?hex=${hex}`);
+  render();
+  const dr = $('drawer'), a = rows.find(x => x.hex === hex);
+  dr.hidden = false;
+  dr.innerHTML = '<div class="d-pad"><div class="d-top"><span>Aircraft detail</span></div>Loading…</div>';
+  let d;
+  try {
+    const r = await fetch(`fleet/${hex}.json`);
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch (e) { dr.querySelector('.d-pad').append(el('div', 'Could not load details.')); return; }
+  if (selHex !== hex) return;
+  const hours = new Array(24).fill(0);
+  for (const s of d.sessions) hours[new Date(s.first_seen * 1000).getHours()]++;
+  const hmax = Math.max(1, ...hours);
+  const photo = d.photo && /^https?:\/\//.test(d.photo.url || '') ? d.photo : null;
+  const facts = [['Passes', a ? a.sessions.toLocaleString() : d.sessions.length], ['Days seen', a ? a.days : '—'],
+                 ['Time in range', a ? fmtDur(a.airtime_s) : '—'], ['Closest', a ? fmtKm(a.closest_km) : '—'],
+                 ['Ceiling', a ? fmtAlt(a.max_alt) : '—'], ['Max speed', a ? fmtSpd(a.max_gs) : '—']];
+  dr.innerHTML = `<div class="d-pad">
+      <div class="d-top"><span>Aircraft detail</span><button id="d-close" aria-label="Close detail">×</button></div>
+      <div class="d-title"><b>${esc(d.tail || '—')}</b><span>${esc(d.hex)}</span></div>
+      <div class="d-sub">${esc([d.type, d.manufacturer].filter(Boolean).join(' · ') || 'Not in the aircraft database')}</div>
+      <div class="d-sub mono" style="font-size:12px">${esc(a && a.callsigns.length ? a.callsigns.map(([f, n]) => `${f} ×${n}`).join(', ') : 'no callsign')}</div>
+      <div class="photo" ${photo ? `style="background-image:url('${esc(photo.url).replace(/'/g, '%27')}')"` : ''}>${photo ? `<span>${photo.source === 'real' ? 'actual aircraft' : 'stock photo, type match'}${photo.credit ? ' — ' + esc(photo.credit) : ''}</span>` : '<span>No photo</span>'}</div>
+      <div class="facts">${facts.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>
+      <div class="h-head"><b>Passes by hour of day</b><span>${d.sessions.length >= 500 ? 'last 500 passes' : 'all time'}</span></div>
+      <div class="hours">${hours.map(h => `<span style="height:${h ? Math.max(8, h / hmax * 100) : 4}%;opacity:${h ? 0.35 + 0.65 * h / hmax : 0.2}"></span>`).join('')}</div>
+      <div class="h-axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+    </div>
+    <div class="passes"><h3>Recent passes</h3>${d.sessions.map(s => {
+      const alt = s.min_alt != null && s.max_alt != null ? `${Math.round(s.min_alt).toLocaleString()}–${Math.round(s.max_alt).toLocaleString()} ft` : '—';
+      return `<div class="pass"><div><div class="w">${esc(fmtTime(s.first_seen))}</div>
+        <div class="m">${esc([s.flight || '—', fmtDur(Math.round(s.last_seen - s.first_seen)), alt, fmtSpd(s.max_gs)].join(' · '))}</div></div>
+        <a href="/?at=${Math.floor(s.first_seen)}&hex=${encodeURIComponent(d.hex)}" target="_blank">▶ Replay</a></div>`;
+    }).join('') || '<div class="pass dim">No passes logged.</div>'}
+    ${d.sessions.length >= 500 ? '<div class="pass dim">Showing the 500 most recent observations.</div>' : ''}</div>`;
+  $('d-close').onclick = closeDetail;
+}
+
+function closeDetail() {
+  selHex = '';
+  $('drawer').hidden = true;
+  history.replaceState(null, '', location.pathname);
+  render();
+}
+
+$('q').oninput = () => { shown = PAGE; render(); };
+$('more').onclick = () => { shown += PAGE; render(); };
+$('chips').onclick = e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  filter = b.dataset.f;
+  for (const x of $('chips').children) x.classList.toggle('on', x === b);
+  shown = PAGE; render();
+};
+$('sortbtn').onclick = () => {  // phone width: cycle through the sorts that have a visible column
+  const i = MOBILE_SORTS.indexOf(sortKey);
+  setSort(MOBILE_SORTS[(i + 1) % MOBILE_SORTS.length]);
+};
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('drawer').hidden) closeDetail(); });
+
+// Same health rules as the live map, shown as a banner here.
+async function checkHealth() {
+  try {
+    const d = await (await fetch('/aircraft.json')).json(), now = d.server_now, probs = [];
+    const ago = s => s < 5400 ? `${Math.round(s / 60)}m` : s < 172800 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`;
+    let text = '';
+    if (!d.updated_at) { probs.push('Poller not running'); }
+    else if (now - d.updated_at > 30) { probs.push('Poller stopped'); text = `No new passes logged since ${new Date(d.updated_at * 1000).toLocaleString()} (${ago(now - d.updated_at)} ago).`; }
+    else if (d.feed && !d.feed.ok) { probs.push('Feed down'); text = d.feed.error || 'no data yet'; }
+    const al = d.alerts;
+    if (al && al.last_error_at && al.last_error_at > (al.last_ok || 0)) { probs.push('Discord failing'); text = text || `Discord: ${al.last_error}`; }
+    $('warn').hidden = !probs.length;
+    $('warn-title').textContent = probs.join(' · ');
+    $('warn-text').textContent = text;
+  } catch (e) { /* the list still works */ }
+  setTimeout(checkHealth, 30000);
+}
+checkHealth();
+
+(async () => {
+  if (params.get('q')) $('q').value = params.get('q');
+  try {
+    rows = (await (await fetch('fleet.json')).json()).aircraft;
+    $('status').hidden = true;
+    $('tbl').hidden = false;
+    render();
+    if (selHex) openDetail(selHex);
+  } catch (e) { $('status').textContent = 'Could not load the aircraft list.'; }
+})();
+</script>
+</body>
+</html>

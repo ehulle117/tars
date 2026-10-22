@@ -1,31 +1,85 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Reception Coverage Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADS-B Console · Coverage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <style>
-  body { margin: 0; font-family: system-ui, sans-serif; background: #0b0d12; }
-  #map { position: absolute; top: 40px; bottom: 0; left: 0; right: 340px; }
-  #bar { height: 40px; display: flex; align-items: center; padding: 0 12px; color: #cfd8e3; font-size: 13px; background: #0b0d12; }
-  #polar-panel {
-    position: absolute; top: 40px; bottom: 0; right: 0; width: 340px;
-    background: #11141c; color: #cfd8e3; padding: 12px; box-sizing: border-box;
-  }
-  #polar-panel h3 { margin: 0 0 8px; font-size: 13px; color: #8fa3c0; font-weight: 600; }
+  :root { --bg:#0B0E13; --card:#11151C; --line:#1A1F28; --line2:#1E2430; --raised:#161B24; --text:#C9D1DC; --hi:#F2F5F9; --mute:#7D8796; --dim:#5F6977; --faint:#4A5361;
+          --violet:#8B7CFF; --cyan:#4FD1E8; --orange:#F5A65B; --pink:#E8689A; --mono:'JetBrains Mono', ui-monospace, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 Inter, system-ui, sans-serif; }
+  #app { height: 100vh; display: grid; grid-template-columns: minmax(0,1fr) 340px; grid-template-rows: 52px minmax(0,1fr); gap: 12px; padding: 0 16px 16px; }
+  header.top { grid-column: 1 / -1; display: flex; align-items: center; gap: 20px; border-bottom: 1px solid var(--line); margin: 0 -16px; padding: 0 20px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--hi); }
+  .brand i { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--violet), var(--cyan)); }
+  nav { display: flex; gap: 2px; }
+  nav a { text-decoration: none; color: var(--mute); padding: 6px 12px; border-radius: 6px; font-weight: 500; }
+  nav a:hover { color: var(--hi); }
+  nav a.on { color: var(--hi); background: var(--raised); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+  #mapcard { position: relative; overflow: hidden; min-height: 0; }
+  #map { position: absolute; inset: 0; background: #0E1219; }
+  .legend { position: absolute; left: 14px; bottom: 14px; z-index: 1000; background: rgba(17,21,28,.9); border: 1px solid var(--line2); border-radius: 8px; padding: 8px 10px; font-size: 11px; color: var(--mute); }
+  .legend .bar { width: 180px; height: 6px; border-radius: 3px; margin: 5px 0 3px; background: linear-gradient(90deg, var(--cyan), var(--violet), var(--pink), var(--orange)); }
+  .legend .ticks { display: flex; justify-content: space-between; font-family: var(--mono); }
+  #polar-panel { padding: 14px; min-height: 0; overflow: auto; }
+  #polar-panel h3 { margin: 0 0 4px; font-size: 13px; color: var(--hi); font-weight: 600; }
+  #polar-panel p { margin: 0 0 10px; color: var(--mute); font-size: 12px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+  .stat div:first-child { font-size: 11px; color: var(--dim); }
+  .stat div:last-child { color: var(--hi); font-weight: 600; font-size: 18px; }
   #polar-panel svg { width: 100%; height: auto; }
+  .leaflet-container { background: #0E1219; font-family: inherit; }
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(200deg) brightness(.72) contrast(.9) saturate(.35); }
+  .leaflet-bar { border: 1px solid var(--line2) !important; border-radius: 8px !important; overflow: hidden; }
+  .leaflet-bar a, .leaflet-bar a:hover { background: rgba(17,21,28,.92); color: var(--text); border-bottom-color: var(--line2); }
+  .leaflet-control-attribution { background: rgba(11,14,19,.75) !important; color: var(--dim); }
+  .leaflet-control-attribution a { color: var(--mute); }
+  @media (max-width: 900px) {
+    #app { height: auto; grid-template-columns: minmax(0,1fr); grid-template-rows: auto 60vh auto; }
+    nav a { padding: 12px 8px; }
+    html body.embedded #app { height: 100vh; grid-template-rows: minmax(0,1fr) auto; }
+    body.embedded #polar-panel { max-height: 38vh; }
+    header.top { flex-wrap: wrap; gap: 8px 14px; padding: 8px 16px; }
+  }
+  /* Inside the /hub iframe: no nav. */
+  body.embedded #app { grid-template-rows: minmax(0,1fr); padding: 8px; gap: 8px; }
+  body.embedded #mapcard { grid-row: 1; }
+  body.embedded header.top { display: none; }
 </style>
 </head>
 <body>
-  <div id="bar">Reception Coverage — <span id="count">0</span> positions logged, max range <span id="maxrange">?</span> km</div>
-  <div id="map"></div>
-  <div id="polar-panel">
-    <h3>Directional Range (max km per 16 compass sectors)</h3>
+<div id="app">
+  <header class="top">
+    <div class="brand"><i></i>Console</div>
+    <nav><a href="/">Live</a><a href="/fleet">Aircraft</a><a class="on" href="/coverage/">Coverage</a><a href="/hub">Hub</a></nav>
+  </header>
+  <section class="card" id="mapcard">
+    <div id="map"></div>
+    <div class="legend">Range from receiver<div class="bar"></div><div class="ticks"><span>0</span><span id="leg-max">? km</span></div></div>
+  </section>
+  <aside class="card" id="polar-panel">
+    <h3>Reception coverage</h3>
+    <p>Most recent logged positions, coloured by range.</p>
+    <div class="stats">
+      <div class="stat"><div>Positions</div><div id="count">0</div></div>
+      <div class="stat"><div>Max range</div><div><span id="maxrange">?</span> km</div></div>
+    </div>
+    <h3>Directional range</h3>
+    <p>Max km in each of 16 compass sectors.</p>
     <svg id="polar" viewBox="0 0 300 300"></svg>
-  </div>
+  </aside>
+</div>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+if (window !== window.top) document.body.classList.add('embedded');
 const N_SECTORS = 16;
+const RAMP = ['#4FD1E8', '#8B7CFF', '#E8689A', '#F5A65B'];  // near -> far
 
 function drawPolar(points, maxRange) {
   // Bucket max range per compass sector, then draw as a filled radar polygon
@@ -46,8 +100,8 @@ function drawPolar(points, maxRange) {
   let svg = '';
   // range rings + labels at 25/50/75/100% of maxRange
   for (const frac of [0.25, 0.5, 0.75, 1.0]) {
-    svg += `<circle cx="${cx}" cy="${cy}" r="${R * frac}" fill="none" stroke="#2a3040" stroke-width="1"/>`;
-    svg += `<text x="${cx + 3}" y="${cy - R * frac + 10}" font-size="9" fill="#5c6b82">${(maxRange * frac).toFixed(0)}km</text>`;
+    svg += `<circle cx="${cx}" cy="${cy}" r="${R * frac}" fill="none" stroke="#2A3140" stroke-width="1" stroke-dasharray="3 4"/>`;
+    svg += `<text x="${cx + 3}" y="${cy - R * frac + 10}" font-size="9" font-family="JetBrains Mono, monospace" fill="#4A5361">${(maxRange * frac).toFixed(0)}km</text>`;
   }
   // compass spokes + labels
   const compass = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
@@ -55,18 +109,18 @@ function drawPolar(points, maxRange) {
     const deg = i * 45;
     const [x, y] = toXY(deg, maxRange * 1.08);
     const [x0, y0] = toXY(deg, 0);
-    svg += `<line x1="${x0}" y1="${y0}" x2="${toXY(deg, maxRange)[0]}" y2="${toXY(deg, maxRange)[1]}" stroke="#1c212b" stroke-width="1"/>`;
-    svg += `<text x="${x}" y="${y}" font-size="11" fill="#8fa3c0" text-anchor="middle">${label}</text>`;
+    svg += `<line x1="${x0}" y1="${y0}" x2="${toXY(deg, maxRange)[0]}" y2="${toXY(deg, maxRange)[1]}" stroke="#1A1F28" stroke-width="1"/>`;
+    svg += `<text x="${x}" y="${y + 4}" font-size="11" fill="#7D8796" text-anchor="middle">${label}</text>`;
   });
 
   // the actual coverage polygon
   const poly = sectorMax.map((r, i) => toXY(i * (360 / N_SECTORS), r));
   const pathD = poly.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt[0].toFixed(1)},${pt[1].toFixed(1)}`).join(' ') + ' Z';
-  svg += `<path d="${pathD}" fill="rgba(80,160,255,0.25)" stroke="#50a0ff" stroke-width="2"/>`;
-  poly.forEach(([x, y]) => { svg += `<circle cx="${x}" cy="${y}" r="2.5" fill="#50a0ff"/>`; });
+  svg += `<path d="${pathD}" fill="rgba(139,124,255,0.22)" stroke="#8B7CFF" stroke-width="2"/>`;
+  poly.forEach(([x, y]) => { svg += `<circle cx="${x}" cy="${y}" r="2.5" fill="#8B7CFF"/>`; });
 
   // receiver at center
-  svg += `<circle cx="${cx}" cy="${cy}" r="4" fill="#ff5050"/>`;
+  svg += `<circle cx="${cx}" cy="${cy}" r="4" fill="#F2F5F9"/>`;
 
   document.getElementById('polar').innerHTML = svg;
 }
@@ -78,19 +132,22 @@ async function load() {
   if (!points.length) return;
 
   const center = data.receiver || points[0];
-  const map = L.map('map').setView([center.lat, center.lon], 7);
+  const map = L.map('map', { zoomControl: false }).setView([center.lat, center.lon], 7);
   window.leafletMap = map;  // read by hub.html to sync panning/zoom
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors'
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
+  // CARTO's dark basemap now needs an API key; OSM tiles darkened in CSS (.leaflet-tile-pane) instead.
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19,
   }).addTo(map);
+  L.circleMarker([center.lat, center.lon], { radius: 5, color: '#F2F5F9', weight: 7, opacity: .25, fillColor: '#F2F5F9', fillOpacity: 1, interactive: false }).addTo(map);
 
   const maxRange = Math.max(...points.map(p => p.range_km));
-  document.getElementById('count').textContent = points.length;
+  document.getElementById('count').textContent = points.length.toLocaleString();
   document.getElementById('maxrange').textContent = maxRange.toFixed(0);
+  document.getElementById('leg-max').textContent = `${maxRange.toFixed(0)} km`;
 
   for (const p of points) {
-    const t = Math.min(1, p.range_km / maxRange);
-    const color = `hsl(${(1 - t) * 200}, 80%, 55%)`; // blue (near) -> red (far)
+    const color = RAMP[Math.min(RAMP.length - 1, Math.floor(p.range_km / maxRange * RAMP.length))];
     L.circleMarker([p.lat, p.lon], { radius: 2, color, weight: 0, fillOpacity: 0.6 }).addTo(map);
   }
 

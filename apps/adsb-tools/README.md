@@ -6,7 +6,8 @@ pinned to `k3s-worker-pi` (see `../adsb-tools.yaml`) since it reads the
 `aircraft.json` that `dump1090-mutability` writes on that node.
 
 - **Flight logger** (`logger.py`) — every aircraft seen, with session start/end and min/max altitude/speed, in `sightings`.
-- **Live map** (`map_server.py` + `static/map.html`) — Leaflet map of current aircraft positions. A warning strip appears if the feed, the poller, or Discord posting stops working. The **Playback** button replays logged tracks (`/history.json`, ~1 position per aircraft per minute, interpolated).
+- **Live map** (`map_server.py` + `static/map.html`) — Leaflet map of current aircraft positions. A warning strip appears if the feed, the poller, or Discord posting stops working. The bottom **timeline** scrubs back through everything logged (`/history.json`, ~1 position per aircraft per minute, interpolated); drag to the right edge to return to live. `/?at=<unix>&hex=<hex>` opens it at a moment. KPI strip and timeline histogram come from `/activity.json?from=&to=&n=` (positions bucketed per time slice). Below ~700px wide it switches to a full-screen map layout.
+- **Aircraft** (`/fleet` + `fleet.py`) — every aircraft ever seen by tail number: times observed, days seen, time in range, first/last seen, max altitude/speed, closest approach, with a replay link per observation.
 - **Hub** (`/hub` on the map server) — the live map and coverage map as two resizable, pan/zoom-synced windows.
 - **Overhead alert bot** (`alert_bot.py`) — Discord post on emergency squawks, military aircraft, helicopters, and low+close traffic.
 - **Coverage map** (`coverage_server.py` + `static/coverage.html`) — every position ever logged, colored by range and broken out as a directional polar plot, to visualize actual antenna reception range.
