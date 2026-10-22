@@ -81,7 +81,8 @@
   .pop-btns { margin-top: 8px; display: flex; gap: 6px; }
   .leaflet-popup-content a.btn { flex: 1; text-align: center; text-decoration: none; background: var(--line2); color: var(--text); border-radius: 6px; padding: 5px 0; font-size: 12px; }
   .leaflet-popup-content a.btn.primary { background: var(--violet); color: var(--bg); font-weight: 600; }
-  .pop-photo { width: 100%; max-height: 120px; object-fit: cover; border-radius: 6px; margin-bottom: 4px; display: block; }
+  #map .leaflet-popup-content { max-height: var(--popmax, 420px); overflow-y: auto; }
+  .pop-photo { width: 100%; max-height: 100px; object-fit: cover; border-radius: 6px; margin-bottom: 4px; display: block; }
   .pop-credit { font-size: 10px; color: var(--dim); margin-bottom: 6px; }
 
   #side { grid-row: 3 / 5; grid-column: 2; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
@@ -326,6 +327,10 @@ const fmtKm = km => km < 10 ? km.toFixed(1) : km.toFixed(0);
 function initMap(lat, lon) {
   map = L.map('map', { zoomControl: false }).setView([lat, lon], 8);
   map.on('dragstart', () => { pb.follow = null; });  // panning by hand stops following
+  // Popups grow after their photo loads, so cap them in CSS to the room above a parked plane.
+  const setPopMax = () => map.getContainer().style.setProperty('--popmax', Math.max(200, map.getSize().y * 0.75 - 60) + 'px');
+  setPopMax();
+  map.on('resize', setPopMax);
   window.leafletMap = map;  // read by hub.html to sync panning/zoom
   L.control.zoom({ position: 'bottomright' }).addTo(map);
   // CARTO's dark basemap now needs an API key; OSM tiles darkened in CSS (.leaflet-tile-pane) instead.
