@@ -34,7 +34,7 @@ spec:
         kubernetes.io/hostname: tars
       containers:
         - name: fetcharr
-          image: egg82/fetcharr:2.2.1
+          image: egg82/fetcharr:2.2.1@sha256:f3cf8a850b57497c529774f9791590cf799db2173a3ba068f9ac13c6535b8b5b
           env:
             - name: PUID
               value: "1000"

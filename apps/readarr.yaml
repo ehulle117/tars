@@ -38,7 +38,7 @@ spec:
           # metadata server is dead). softcover = Goodreads metadata, the only
           # variant compatible with the existing Readarr DB. Upgrades the DB in
           # place - rolling back means restoring /config from the appdata backup.
-          image: ghcr.io/pennydreadful/bookshelf:softcover-v0.4.21.182
+          image: ghcr.io/pennydreadful/bookshelf:softcover-v0.4.21.182@sha256:23defe59522d0591ade31b2a59c674648f43be47fae769d93d32bb1e038c7170
           env:
             - name: PUID
               value: "1000"
