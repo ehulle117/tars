@@ -56,6 +56,16 @@ at container start. [Renovate](renovate.json) opens PRs to bump them, waits
 are pulled within that window), and adds `@sha256` digests to every image.
 Our own `ghcr.io/ehulle117/*` images are excluded since this repo builds them.
 
+## Network policies
+
+[`apps/network-policies.yaml`](apps/network-policies.yaml) isolates the pods
+that handle untrusted input (deluge, flaresolverr, valheim/valheim2, mead,
+adsb-tools). No other pod accepts connections from them, and they can reach
+only DNS and the public internet: not the LAN, and not other pods. Everything
+else keeps today's behavior. When adding an app like that, add its `app`
+label to both lists. To check the policies after a change, run
+[`scripts/verify-network-policies.sh`](scripts/verify-network-policies.sh).
+
 ## Storage
 
 Media is served from Case (Unraid, `192.168.8.152`) over NFS and mounted

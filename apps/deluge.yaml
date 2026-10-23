@@ -150,7 +150,9 @@ metadata:
   name: deluge-svc
   namespace: apps
 spec:
-  type: LoadBalancer
+  # In-cluster only: the *arr apps and deluge-* CronJobs reach the daemon,
+  # web UI and Privoxy by this name. Peers come in over the VPN, not the LAN.
+  type: ClusterIP
   selector:
     app: deluge
   ports:
@@ -174,3 +176,21 @@ spec:
       protocol: TCP
       port: 8118
       targetPort: 8118
+---
+# Only the web UI is published on the LAN (NPM's deluge.tars.local points at
+# tars:8112). The daemon RPC port and Privoxy (an open HTTP proxy) used to be
+# published on every node IP too.
+apiVersion: v1
+kind: Service
+metadata:
+  name: deluge-web-svc
+  namespace: apps
+spec:
+  type: LoadBalancer
+  selector:
+    app: deluge
+  ports:
+    - name: web
+      protocol: TCP
+      port: 8112
+      targetPort: 8112
