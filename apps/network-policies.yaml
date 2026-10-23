@@ -76,3 +76,31 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+---
+# The Tailscale sidecars (valheim, valheim2, mead) keep their node state in a
+# Secret, so they need the API server. Their ServiceAccounts' RBAC limits
+# them to their own state Secret. Both the ClusterIP and the post-DNAT
+# endpoint are listed since policy can match either.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tailscale-egress-apiserver
+  namespace: apps
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [valheim, valheim2, mead]
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.1/32
+      ports:
+        - {protocol: TCP, port: 443}
+    - to:
+        - ipBlock:
+            cidr: 192.168.8.103/32
+      ports:
+        - {protocol: TCP, port: 6443}
