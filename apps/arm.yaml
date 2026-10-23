@@ -51,12 +51,13 @@ spec:
             - name: config
               mountPath: /home/arm/db
               subPath: db
+            # Whole volume, no subPath: a subPath bind mount of NFS goes
+            # stale ("Stale file handle") whenever Case reboots, while a
+            # whole-volume mount recovers. RAW_PATH/TRANSCODE_PATH/
+            # COMPLETED_PATH in arm.yaml (on arm-config-pvc) point at
+            # /mnt/data/raw/{raw,transcode,completed}/.
             - name: media
-              mountPath: /home/arm/media
-              subPath: raw
-            - name: media
-              mountPath: /home/arm/completed
-              subPath: completed
+              mountPath: /mnt/data
             - name: dev-sr0
               mountPath: /dev/sr0
       volumes:
