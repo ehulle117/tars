@@ -1,0 +1,78 @@
+# NetworkPolicies for the apps namespace (enforced by k3s's built-in
+# kube-router policy controller).
+#
+# The pods below handle untrusted input - torrents (deluge), arbitrary
+# websites (flaresolverr), public game clients and Tailscale peers (valheim,
+# valheim2, mead), and ADS-B/aircraft lookups (adsb-tools). If one of them is
+# compromised it shouldn't be a foothold into the rest of the cluster or the
+# home LAN, so:
+#   - nothing in this namespace accepts connections *from* them, and
+#   - they can only reach DNS and the public internet - not the LAN (router,
+#     Case, NPM) and not other pods.
+# Everything else keeps working as before: ingress from other pods here, from
+# kube-system (Traefik, servicelb) and from the node IPs (kubelet probes,
+# LoadBalancer traffic) is allowed.
+#
+# Adding a new untrusted-input app: add its `app` label to both lists.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: apps
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-trusted
+  namespace: apps
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - ipBlock:
+            cidr: 192.168.8.103/32  # tars
+        - ipBlock:
+            cidr: 192.168.8.226/32  # k3s-worker-pi
+        - ipBlock:
+            cidr: 192.168.8.227/32  # k3s-worker-case
+        # NotIn also matches pods with no `app` label (CronJob pods).
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: NotIn
+                values: [deluge, flaresolverr, valheim, valheim2, mead, adsb-tools-poller, adsb-tools-map, adsb-tools-coverage]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: untrusted-egress-internet-only
+  namespace: apps
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [deluge, flaresolverr, valheim, valheim2, mead, adsb-tools-poller, adsb-tools-map, adsb-tools-coverage]
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
