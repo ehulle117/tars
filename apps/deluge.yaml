@@ -47,7 +47,11 @@ spec:
         kubernetes.io/hostname: tars
       containers:
         - name: deluge
-          image: binhex/arch-delugevpn:2.2.0-1-04
+          # 2.2.0-1-04 -> 2.2.0-8-01 (2026-10-23): clears 4 critical pillow CVEs
+          # (#158, #163; scans 0 critical) and moves PIA port forwarding to the
+          # v2 token API. Pre-upgrade config backup:
+          # /config/backups/config-pre-2.2.0-8-01-20261023.tgz
+          image: binhex/arch-delugevpn:2.2.0-8-01
           securityContext:
             capabilities:
               add:
