@@ -1,6 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", "docker:pinDigests", "helpers:pinGitHubActionDigests"],
+  "extends": ["config:recommended", "docker:pinDigests", "helpers:pinGitHubActionDigests", "group:all", "schedule:weekly"],
+  "timezone": "America/New_York",
   "minimumReleaseAge": "3 days",
   "kubernetes": {
     "managerFilePatterns": ["/^apps/.+\\.yaml$/", "/^storage/.+\\.yaml$/"]

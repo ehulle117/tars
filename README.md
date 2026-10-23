@@ -51,7 +51,8 @@ All workloads run in the `apps` namespace unless noted.
 
 Every third-party image is pinned to a version tag (or a digest, where the
 upstream only publishes `latest`), and so are the pip/npm packages installed
-at container start. [Renovate](renovate.json) opens PRs to bump them, waits
+at container start. [Renovate](renovate.json) opens one grouped PR a week
+(Monday mornings, ET) to bump them, waits
 3 days after a release before proposing it (most malicious package releases
 are pulled within that window), and adds `@sha256` digests to every image.
 Our own `ghcr.io/ehulle117/*` images are excluded since this repo builds them.
