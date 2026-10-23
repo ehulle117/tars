@@ -44,6 +44,13 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/arm/config
+            # ARM's SQLite DB (DBFILE in arm.yaml) lives outside its config
+            # dir, so it used to be wiped on every pod restart. The db/
+            # subfolder was pre-created on the PVC as arm:arm - a subPath
+            # kubelet creates itself would be root-owned and unwritable.
+            - name: config
+              mountPath: /home/arm/db
+              subPath: db
             - name: media
               mountPath: /home/arm/media
               subPath: raw
