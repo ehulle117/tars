@@ -10,8 +10,8 @@
 #   - they can only reach DNS and the public internet - not the LAN (router,
 #     Case, NPM) and not other pods.
 # Everything else keeps working as before: ingress from other pods here, from
-# kube-system (Traefik, servicelb) and from the node IPs (kubelet probes,
-# LoadBalancer traffic) is allowed.
+# kube-system (Traefik, servicelb), the nodes, and LAN clients of the
+# LoadBalancer services is allowed.
 #
 # Adding a new untrusted-input app: add its `app` label to both lists.
 apiVersion: networking.k8s.io/v1
@@ -36,15 +36,14 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
+        # LAN clients of the LoadBalancer services. kube-router filters
+        # forwarded packets before kube-proxy's SNAT, so it sees the real
+        # client IP here even though the app logs show the node gateway.
+        # Also covers the node IPs.
         - ipBlock:
-            cidr: 192.168.8.103/32  # tars
-        - ipBlock:
-            cidr: 192.168.8.226/32  # k3s-worker-pi
-        - ipBlock:
-            cidr: 192.168.8.227/32  # k3s-worker-case
-        # LoadBalancer traffic is SNAT'd to the receiving node's cni0 gateway
-        # (.1) or, when forwarded to a pod on another node, its flannel.1
-        # address (.0) - not to the node IP.
+            cidr: 192.168.8.0/24
+        # Node-originated traffic (kubelet probes, host -> pod) comes from
+        # each node's cni0 (.1) or flannel.1 (.0) address.
         - ipBlock:
             cidr: 10.42.0.0/31  # tars
         - ipBlock:
