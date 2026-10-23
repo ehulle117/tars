@@ -51,7 +51,7 @@ spec:
           # (#158, #163; scans 0 critical) and moves PIA port forwarding to the
           # v2 token API. Pre-upgrade config backup:
           # /config/backups/config-pre-2.2.0-8-01-20261023.tgz
-          image: binhex/arch-delugevpn:2.2.0-8-01
+          image: binhex/arch-delugevpn:2.2.0-8-01@sha256:43b7d2e181785270ddaf57de2d817fc98c99090682c897c2f86223c78185d3fe
           securityContext:
             capabilities:
               add:
