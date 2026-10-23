@@ -42,6 +42,15 @@ spec:
             cidr: 192.168.8.226/32  # k3s-worker-pi
         - ipBlock:
             cidr: 192.168.8.227/32  # k3s-worker-case
+        # LoadBalancer traffic is SNAT'd to the receiving node's cni0 gateway
+        # (.1) or, when forwarded to a pod on another node, its flannel.1
+        # address (.0) - not to the node IP.
+        - ipBlock:
+            cidr: 10.42.0.0/31  # tars
+        - ipBlock:
+            cidr: 10.42.1.0/31  # k3s-worker-pi
+        - ipBlock:
+            cidr: 10.42.4.0/31  # k3s-worker-case
         # NotIn also matches pods with no `app` label (CronJob pods).
         - podSelector:
             matchExpressions:
