@@ -67,7 +67,7 @@ spec:
             - |
               apt-get update && \
               apt-get install -y --no-install-recommends git openssh-client ca-certificates curl ripgrep && \
-              npm install -g @anthropic-ai/claude-code && \
+              npm install -g @anthropic-ai/claude-code@2.1.296 && \
               [ -e /root/.claude.json ] && [ ! -L /root/.claude.json ] && mv /root/.claude.json /root/.claude/claude.json; \
               ln -sf /root/.claude/claude.json /root/.claude.json && \
               sleep infinity

@@ -34,7 +34,7 @@ spec:
         kubernetes.io/hostname: tars
       containers:
         - name: radarr
-          image: lscr.io/linuxserver/radarr:latest
+          image: lscr.io/linuxserver/radarr:6.4.4.10685-ls320
           env:
             - name: PUID
               value: "1000"

@@ -170,7 +170,7 @@ spec:
             - |
               set -e
               apk add --no-cache kubectl
-              pip install --quiet --no-cache-dir discord.py
+              pip install --quiet --no-cache-dir discord.py==2.7.1
               python /scripts/bot.py
           env:
             - name: DISCORD_BOT_TOKEN
