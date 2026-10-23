@@ -98,7 +98,7 @@ data:
             lines.append(f"  ... and {len(executables) - MAX_LISTED} more")
     body = "\n".join(lines)
 
-    print(f"Found {len(leftovers) + len(executables)} issue(s), queuing for Claude triage.")
+    print(f"Found {len(leftovers) + len(executables)} issue(s), queuing for alerts.")
     queue_dir = "/queue/.tars-triage-queue"
     os.makedirs(queue_dir, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")

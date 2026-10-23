@@ -121,7 +121,7 @@ spec:
                     kubectl rollout status deployment/flaresolverr -n apps --timeout=120s
                   }
                   # On failure, drop a note in the triage queue (drained by
-                  # pod-health-check -> Claude triage -> Discord), same as
+                  # tars-alerts -> Discord), same as
                   # the backup jobs.
                   if ! run; then
                     mkdir -p /queue/.tars-triage-queue

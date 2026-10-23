@@ -1,0 +1,169 @@
+# Posts every detector's findings straight to Discord. Every detector
+# (pod-health-check, resource-pressure-check, arr-queue-check,
+# deluge-stall-check, router-check, argo-sync-check, case-health-check, the
+# three *-appdata-backup CronJobs, tars-updater-agent's critical-CVE alert)
+# only ever detects and drops a file in .tars-triage-queue/ on the shared
+# nfs-media-pvc. This job drains that directory every run: one Forum thread
+# per new finding in ALERTS_CHANNEL_ID, then deletes the file. No Claude, no
+# GitHub - replaced the Claude+gh triage job that held a GitHub PAT and a
+# Claude token and acted on text that came from pod logs.
+#
+# Dedupe is a small JSON state file next to the queue: the same finding
+# (same source, same text with digits ignored, so restart counts and
+# timestamps don't make it "new") is posted once, then re-posted as a reply
+# in its original thread at most once a day while it keeps recurring.
+# A failed post leaves the file for the next run and skips the Uptime Kuma
+# heartbeat - this job can't queue an alert about itself, so Kuma is the
+# only thing that notices it's broken.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tars-alerts-script
+  namespace: apps
+data:
+  check.py: |
+    import hashlib
+    import json
+    import os
+    import re
+    import subprocess
+    import sys
+    import time
+
+    sys.path.insert(0, "/alert-lib")
+    from alert_lib import discord_post
+
+    BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
+    ALERTS_CHANNEL_ID = os.environ["ALERTS_CHANNEL_ID"]
+    QUEUE_DIR = "/queue/.tars-triage-queue"
+    STATE_PATH = "/queue/.tars-alert-state.json"
+    REPOST_AFTER = 24 * 3600
+    FORGET_AFTER = 7 * 24 * 3600
+
+
+    def source_label(fname):
+        # Strip the trailing "-YYYYMMDDHHMMSS.txt" a detector stamps its
+        # queue file with, leaving just the detector's name as the label.
+        return re.sub(r"-\d{14}\.txt$", "", fname)
+
+
+    def finding_key(label, findings):
+        return label + ":" + hashlib.sha1(re.sub(r"\d+", "#", findings).encode()).hexdigest()
+
+
+    try:
+        with open(STATE_PATH) as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        state = {}
+
+    now = time.time()
+    state = {k: v for k, v in state.items() if now - v["last"] < FORGET_AFTER}
+
+    failed = 0
+    files = sorted(os.listdir(QUEUE_DIR)) if os.path.isdir(QUEUE_DIR) else []
+    for fname in files:
+        fpath = os.path.join(QUEUE_DIR, fname)
+        with open(fpath) as f:
+            findings = f.read().strip()
+        label = source_label(fname)
+        key = finding_key(label, findings)
+        seen = state.get(key)
+        try:
+            if not findings:
+                pass
+            elif seen and now - seen["last"] < REPOST_AFTER:
+                print(f"[{label}] already posted {int((now - seen['last']) / 60)} min ago, skipping")
+            elif seen:
+                discord_post(BOT_TOKEN, f"/channels/{seen['thread']}/messages",
+                             {"content": ("Still happening:\n" + findings)[:2000]})
+                seen["last"] = now
+                print(f"[{label}] re-posted in thread {seen['thread']}")
+            else:
+                first_line = findings.splitlines()[0].strip("`*# ")
+                posted = discord_post(BOT_TOKEN, f"/channels/{ALERTS_CHANNEL_ID}/threads",
+                                      {"name": f"{label}: {first_line}"[:100],
+                                       "message": {"content": findings[:2000]}})
+                state[key] = {"thread": posted["id"], "last": now}
+                print(f"[{label}] posted thread {posted['id']}")
+            os.remove(fpath)
+        except Exception as e:
+            # Leave the file for the next run rather than crashing - one bad
+            # file shouldn't block every other file in the queue (tars#85).
+            failed += 1
+            print(f"[{label}] post failed, leaving in queue for retry: {e}")
+
+    with open(STATE_PATH, "w") as f:
+        json.dump(state, f)
+
+    if failed:
+        sys.exit(f"{failed} queue file(s) failed to post")
+
+    kuma_url = os.environ.get("KUMA_PUSH_URL")
+    if kuma_url:
+        # Non-fatal: Kuma already alerts on a missed heartbeat (tars#121).
+        try:
+            subprocess.run(["wget", "-q", "-O-", kuma_url], check=True, timeout=15)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            print(f"uptime-kuma heartbeat failed (non-fatal): {e}")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tars-alerts
+  namespace: apps
+spec:
+  schedule: "13-59/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          # Never (not OnFailure): a failed run already leaves its files for
+          # the next scheduled run.
+          restartPolicy: Never
+          containers:
+          - name: tars-alerts
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py"]
+            env:
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: discord-alerts
+                  key: bot_token
+            - name: ALERTS_CHANNEL_ID
+              value: "1546905058099331202"
+            - name: KUMA_PUSH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: uptime-kuma-push
+                  key: tars_alert_triage_url
+                  optional: true
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 128Mi
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: lib
+              mountPath: /alert-lib
+            - name: triage-queue
+              mountPath: /queue
+          volumes:
+          - name: script
+            configMap:
+              name: tars-alerts-script
+          - name: lib
+            configMap:
+              name: alert-lib
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc
