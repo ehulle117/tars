@@ -11,7 +11,7 @@ data:
     try:
         from deluge_client import DelugeRPCClient
     except ImportError:
-        os.system(f"{sys.executable} -m pip install --quiet deluge-client")
+        os.system(f"{sys.executable} -m pip install --quiet deluge-client==1.10.2")
         from deluge_client import DelugeRPCClient
 
     HOST = os.environ.get("DELUGE_HOST", "deluge-svc.apps.svc.cluster.local")

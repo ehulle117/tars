@@ -1,0 +1,32 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "docker:pinDigests", "helpers:pinGitHubActionDigests"],
+  "minimumReleaseAge": "3 days",
+  "kubernetes": {
+    "managerFilePatterns": ["/^apps/.+\\.yaml$/", "/^storage/.+\\.yaml$/"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "pip/npm packages installed at container start inside manifests",
+      "managerFilePatterns": ["/^apps/.+\\.yaml$/"],
+      "matchStrings": [
+        "pip install [^\\n]*?(?<depName>deluge-client|discord\\.py)==(?<currentValue>[^\\s\"]+)",
+        "npm install -g (?<depName>@anthropic-ai/claude-code)@(?<currentValue>[^\\s\"]+)"
+      ],
+      "datasourceTemplate": "{{#if (equals depName '@anthropic-ai/claude-code')}}npm{{else}}pypi{{/if}}"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Our own images are built from this repo on every push to main",
+      "matchPackageNames": ["ghcr.io/ehulle117/**"],
+      "enabled": false
+    },
+    {
+      "description": "linuxserver tags carry a -lsNNN build suffix",
+      "matchPackageNames": ["lscr.io/linuxserver/**"],
+      "versioning": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(\\.(?<build>\\d+))?-ls(?<revision>\\d+)$"
+    }
+  ]
+}

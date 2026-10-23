@@ -119,7 +119,7 @@ spec:
           # lloesche/valheim-server-docker is unmaintained; the project moved
           # to community-valheim-tools, which is the one that actually ships
           # 1.0 support (chunked world save dirs).
-          image: ghcr.io/community-valheim-tools/valheim-server:latest
+          image: ghcr.io/community-valheim-tools/valheim-server:latest@sha256:f34d67ba8023e343b10ffda0144759a8c8d986f276510460315a01051bed8a6d
           env:
             - name: SERVER_NAME
               valueFrom:
@@ -217,7 +217,7 @@ spec:
             failureThreshold: 5
 
         - name: tailscale
-          image: ghcr.io/tailscale/tailscale:latest
+          image: ghcr.io/tailscale/tailscale:v1.104.2
           env:
             - name: TS_AUTHKEY
               valueFrom:

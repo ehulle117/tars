@@ -34,7 +34,7 @@ spec:
         kubernetes.io/hostname: tars
       containers:
         - name: prowlarr
-          image: lscr.io/linuxserver/prowlarr:latest
+          image: lscr.io/linuxserver/prowlarr:2.6.5.5623-ls163
           env:
             - name: PUID
               value: "1000"

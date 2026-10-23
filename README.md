@@ -47,6 +47,15 @@ All workloads run in the `apps` namespace unless noted.
 | Alert triage | [`apps/tars-alert-triage.yaml`](apps/tars-alert-triage.yaml) | `python:3.12-alpine` | CronJob, every 15 min — the only place Claude/`gh`/Discord triage happens. Drains every detector's queued findings, dedupes against open GitHub issues, opens/comments/skips, posts to Discord. Needs a `claude-oauth` Secret (`token` = output of `claude setup-token`); optional `tars_alert_triage_url` key in `uptime-kuma-push` for a heartbeat that only fires on fully clean runs. See "Alerting" below |
 | Claude Code dev pod | [`apps/claude-code.yaml`](apps/claude-code.yaml) | `node:22-bookworm-slim` + `@anthropic-ai/claude-code` | Persistent pod you `kubectl exec` into for interactive Claude Code sessions against this repo/cluster. Not a service — just `sleep infinity` with PVCs for `/workspace` and `~/.claude` so login survives restarts. |
 
+## Updates
+
+Every third-party image is pinned to a version tag (or a digest, where the
+upstream only publishes `latest`), and so are the pip/npm packages installed
+at container start. [Renovate](renovate.json) opens PRs to bump them, waits
+3 days after a release before proposing it (most malicious package releases
+are pulled within that window), and adds `@sha256` digests to every image.
+Our own `ghcr.io/ehulle117/*` images are excluded since this repo builds them.
+
 ## Storage
 
 Media is served from Case (Unraid, `192.168.8.152`) over NFS and mounted
