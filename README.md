@@ -34,7 +34,7 @@ All workloads run in the `apps` namespace unless noted.
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | [`apps/uptime-kuma.yaml`](apps/uptime-kuma.yaml) | `louislam/uptime-kuma` | Status/uptime monitoring for the cluster |
 | [Valheim](docs/valheim/README.md) | [`apps/valheim.yaml`](apps/valheim.yaml) | `ghcr.io/lloesche/valheim-server` | Dedicated game server, reachable over Tailscale (see linked doc for network diagram) |
 | [Mead Log](apps/mead/PLAN.md) | [`apps/mead.yaml`](apps/mead.yaml) | `ghcr.io/ehulle117/tars-mead` | Custom service: tracks mead batches (planned/active/archived), hydrometer readings, per-batch costs, an inventory with reorder levels and a shopping list (plan a batch against the shelf), a who-paid ledger, bottles left / tastings / printable labels with photos, batch comparison and CSV export, iSpindel readings ([setup](docs/mead-ispindel.md)), TOSNA nutrient schedule, stabilize/backsweeten math, and starter recipes from the r/mead wiki. FastAPI + SQLite (photos beside it) on the `mead-data-tars` local-path PVC on `tars`, covered by the 3 AM tars appdata backup. Shared with Gabe over Tailscale ([setup](docs/mead-tailscale.md)). http://homebrew.case.local (Nginx Proxy Manager route) / port 8770. `mead-bot` (same manifest) posts due tasks to Discord at 6 AM ET via the Tars bot; reply to a task with a reading (`1.040 68F`) or `done` to log it |
-| [tars-updater-agent](tars-updater-agent/README.md) | [`apps/tars-updater-agent.yaml`](apps/tars-updater-agent.yaml) | `ghcr.io/ehulle117/tars-updater-agent` | Custom service: daily Trivy vuln scans (critical findings also queued for Claude triage — see "Claude-triaged alerts" below) + weekly OS/container update digest posted to Discord via the `Tars` bot (digest only, not triaged) |
+| [tars-updater-agent](tars-updater-agent/README.md) | [`apps/tars-updater-agent.yaml`](apps/tars-updater-agent.yaml) | `ghcr.io/ehulle117/tars-updater-agent` | Custom service: daily Trivy vuln scans (critical findings also queued for alerts — see "Alerting" below) + weekly OS/container update digest posted to Discord via the `Tars` bot (digest only, not triaged) |
 | Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml), [`apps/case-worker-appdata-backup.yaml`](apps/case-worker-appdata-backup.yaml), [`apps/pi-appdata-backup.yaml`](apps/pi-appdata-backup.yaml) | `alpine` | CronJobs, daily (3:00/3:15/3:30 AM), copy each node's local-path appdata to Case; queues for triage if a run fails — see "Alerting" below |
 | *arr queue check | [`apps/arr-queue-check.yaml`](apps/arr-queue-check.yaml) | `python:3.12-alpine` | CronJob, daily 8 AM, checks Radarr/Sonarr/Lidarr/Readarr queues for stuck imports (24h+, or immediately for executable/fake releases) and Prowlarr for long-failing indexers; queues a report only when something's actually wrong |
 | Bookshelf junk cleanup | [`apps/bookshelf-junk-cleanup.yaml`](apps/bookshelf-junk-cleanup.yaml) | `python:3.12-alpine` | CronJob, Sundays 6 AM, unmonitors obvious non-book junk (comic issues, box sets, samplers, study guides, coloring books, foreign editions) among Bookshelf books added in the last 8 days that have no file. Logs what it changed; `DRY_RUN=1` previews |
@@ -44,7 +44,7 @@ All workloads run in the `apps` namespace unless noted.
 | Argo sync check | [`apps/argo-sync-check.yaml`](apps/argo-sync-check.yaml) | `python:3.12-alpine` | CronJob, every 15 min, reads `Application` status straight off the K8s API and flags anything not `Synced`/`Healthy` — replaces Argo CD's native webhook notifier so this also routes through the bot |
 | Pod health check | [`apps/pod-health-check.yaml`](apps/pod-health-check.yaml) | `python:3.12-alpine` | CronJob, every 15 min, flags CrashLoopBackOff/ImagePullBackOff/OOMKilled/high-restart/stuck-Pending pods cluster-wide. Read-only via the `cluster-health-checker` ClusterRole. Detector only — queues, doesn't triage |
 | Resource pressure check | [`apps/resource-pressure-check.yaml`](apps/resource-pressure-check.yaml) | `python:3.12-alpine` | CronJob, every 30 min, checks node CPU/memory (via metrics-server) and DiskPressure/MemoryPressure conditions, plus Case's NFS export disk usage above 90%. Detector only — queues, doesn't triage |
-| Alert triage | [`apps/tars-alert-triage.yaml`](apps/tars-alert-triage.yaml) | `python:3.12-alpine` | CronJob, every 15 min — the only place Claude/`gh`/Discord triage happens. Drains every detector's queued findings, dedupes against open GitHub issues, opens/comments/skips, posts to Discord. Needs a `claude-oauth` Secret (`token` = output of `claude setup-token`); optional `tars_alert_triage_url` key in `uptime-kuma-push` for a heartbeat that only fires on fully clean runs. See "Alerting" below |
+| Alerts | [`apps/tars-alerts.yaml`](apps/tars-alerts.yaml) | `python:3.12-alpine` | CronJob, every 15 min. Drains every detector's queued findings and posts each new one to Discord as a Forum thread, deduped (repeats re-posted at most daily). See \"Alerting\" below |
 | Claude Code dev pod | [`apps/claude-code.yaml`](apps/claude-code.yaml) | `node:22-bookworm-slim` + `@anthropic-ai/claude-code` | Persistent pod you `kubectl exec` into for interactive Claude Code sessions against this repo/cluster. Not a service — just `sleep infinity` with PVCs for `/workspace` and `~/.claude` so login survives restarts. |
 
 ## Updates
@@ -83,14 +83,14 @@ this repo — and follows one shape: a small set of **detectors** (one per
 resource: pods, node/Case resource pressure, *arr queues, Deluge, the
 router, Case's array, Argo CD sync status, the three appdata backups,
 `tars-updater-agent`'s CVE scan) each just look for a problem and, if they
-find one, drop a text file in a shared queue. One job, **`tars-alert-triage`**
-([`apps/tars-alert-triage.yaml`](apps/tars-alert-triage.yaml)), is the only
-thing that ever touches Claude, `gh`, or Discord for a problem report — no
-detector triages its own findings, holds a GitHub token, or knows a channel
+find one, drop a text file in a shared queue. One job, **`tars-alerts`**
+([`apps/tars-alerts.yaml`](apps/tars-alerts.yaml)), is the only
+thing that posts a problem report to Discord — no detector holds the bot
+token for alerts or knows a channel
 ID. Two channels total:
 
-- **Alerts channel** (`ALERTS_CHANNEL_ID`, Forum) — every triaged problem
-  from every detector, one thread per tracked issue, thread title
+- **Alerts channel** (`ALERTS_CHANNEL_ID`, Forum) — every problem
+  from every detector, one thread per distinct finding, thread title
   `<source>: <summary>`.
 - **Digest channel** (`DIGEST_CHANNEL_ID`, `1546986016861192202`, plain
   channel) — routine "you should know this" info that isn't a problem:
@@ -102,7 +102,7 @@ ID. Two channels total:
 
 Every detector is symmetric: find a problem or don't, and if so, write
 `<queue-mount>/.tars-triage-queue/<source>-<timestamp>.txt` on the shared
-`nfs-media-pvc`. None of them know about Discord, GitHub, or Claude.
+`nfs-media-pvc`. None of them know about Discord.
 
 - `pod-health-check` (15 min): CrashLoopBackOff/ImagePullBackOff/OOMKilled/
   high-restart/stuck-Pending pods cluster-wide, via the read-only
@@ -133,42 +133,26 @@ Argo CD's and Uptime Kuma's *own* native notification configs (which only
 know how to POST to a fixed webhook URL) are unused/removed in favor of the
 detectors above — one shape, no separate webhook-based path to keep in sync.
 
-### `tars-alert-triage`
+### `tars-alerts`
 
-Runs every 15 min, node-pinned to `tars` (needs `claude-code-config-pvc`
-mounted read-write — the same PVC the `claude-code` dev pod uses, so its
-login is what authenticates Claude here, no separate Anthropic API key).
-Each run:
+Runs every 15 min. Each queued file becomes one Forum thread in
+`ALERTS_CHANNEL_ID`, titled `<source>: <first line>`, and the file is
+deleted after a successful post (a failed post leaves it for the next run).
+Repeats are deduped in `.tars-alert-state.json` next to the queue: the same
+finding (digits ignored) is posted once, then re-posted as a reply in its
+original thread at most once a day while it keeps recurring.
 
-1. Bootstraps Claude Code + `gh` only if the queue isn't empty.
-2. For each queued file: runs a Claude triage prompt (shared as
-   `triage_prompt`/`run_triage` in [`apps/alert-lib.yaml`](apps/alert-lib.yaml)) —
-   checks `gh issue list --repo ehulle117/tars --state open` for an existing
-   issue, then opens one, comments on the existing one, or does nothing on
-   GitHub if it's not actually worth tracking.
-3. Posts the result to `ALERTS_CHANNEL_ID` via the `Tars` bot
-   (`post_and_track` in `alert-lib.yaml`) as a new Forum thread — or, for a
-   recurring finding, a reply into the *same* thread as before (looked up
-   via a `discord_thread_id` marker stashed in the issue body).
-4. Deletes the queue file only after a successful post — a failed run
-   leaves it for the next attempt.
+No Claude and no GitHub. This replaced a Claude + `gh` triage job that held a
+GitHub PAT and a Claude token while acting on text from pod logs.
 
-`alert-lib.yaml`'s `discord_post`/`post_and_track`/`triage_prompt`/
-`run_triage` are the one place this logic is written — every script that
-touches Discord mounts this ConfigMap instead of carrying its own copy.
-
-Needs: `claude-code-config-pvc`, `github-pat` Secret (`GH_TOKEN`),
-`GITHUB_REPO` env var, `discord-alerts` Secret (`bot_token`),
-`ALERTS_CHANNEL_ID` env var, and `nfs-media-pvc` mounted for the queue.
+Needs: `discord-alerts` Secret (`bot_token`), `ALERTS_CHANNEL_ID` env var,
+`nfs-media-pvc` for the queue, optional `tars_alert_triage_url` key in
+`uptime-kuma-push` for a heartbeat that only fires on clean runs.
 
 **Note on testing changes here**: because `selfHeal: true` is set on the
 `tars-apps`/`tars-storage` Argo CD Applications, a live `kubectl apply`
-against anything Argo CD manages gets silently reverted back to match
-`main` within moments (not instantly — a live test can appear to pass by
-winning a race against that reconcile cycle, then fail once merged if the
-actual committed content is broken) — validate with `--dry-run=client`, but
-treat a live-tested-before-merge result as provisional and re-verify after
-the real merge lands.
+against anything Argo CD manages gets reverted to match `main` within
+moments - validate with `--dry-run=client` and re-verify after merge.
 
 ### Secrets
 
@@ -178,8 +162,6 @@ the real merge lands.
 - **`router-ssh-key`** / **`case-ssh-key`** (`apps` namespace, out-of-band):
   dedicated ed25519 keypairs, public half authorized on the router/Case
   respectively — not the same key used for interactive SSH access.
-- **`github-pat`** (`apps` namespace, key `token`): the same classic PAT
-  wired into Argo CD's repo credentials, reused for `gh issue` read/write.
 - **`uptime-kuma-push`** (`apps` namespace): one push-monitor URL per key
   (`pod_health_check_url`, `resource_pressure_check_url`,
   `tars_appdata_backup_url`, `case_worker_appdata_backup_url`,
@@ -188,33 +170,4 @@ the real merge lands.
   only on success. This catches a job crashing before it ever reaches its
   own queue-write step — something the queue/triage alerting above can't
   see on its own. Configured in Uptime Kuma itself (not tracked in git).
-
-### Resolved-issue notice back to Discord
-
-When Claude opens a new tracked issue, the bot's `POST /channels/{id}/threads`
-response includes both the created Forum thread's id *and* the original
-message's id, which get stashed in the issue body as invisible HTML
-comments (`<!-- discord_thread_id: ... discord_message_id: ... -->`) via
-one `gh issue edit` call. [`.github/workflows/issue-closed-notify.yml`](.github/workflows/issue-closed-notify.yml)
-triggers whenever any issue in this repo closes, looks for those markers,
-and — only if present — posts a "✅ Resolved" follow-up into that exact
-thread and adds a ✅ reaction directly on the original message (a no-op for
-any issue without the markers, e.g. one filed by hand, or opened before
-this existed).
-
-Both steps use the bot (`DISCORD_BOT_TOKEN` repo secret — a real Discord
-bot created via the Discord Developer Portal, invited to the server with
-Send Messages/Create Posts in Forums/Add Reactions), not a webhook — a
-webhook can only post into threads under its own parent channel, and
-findings now route to one of three different channels, so the bot's
-"post to any channel I have access to" is what makes this work without a
-separate webhook per channel. Separate from anything in-cluster since
-Actions runs on GitHub's infrastructure, not Tars.
-
-A recurring problem — Claude decides to comment on an existing issue
-rather than open a new one — looks up that issue's stashed
-`discord_thread_id` first and, if found, posts the follow-up as a reply in
-that same original thread (`?thread_id=...`) instead of spawning a new
-Forum post. Falls back to creating a new post only if the existing issue
-predates this feature and has no marker to find.
 

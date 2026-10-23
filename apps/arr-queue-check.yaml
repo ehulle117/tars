@@ -146,13 +146,13 @@ data:
                 text_lines.append(f"  - {idx['name']}: failing since {idx['since']} ({idx['days']:.0f} days)")
         text_body = "\n".join(text_lines)
 
-        print(f"Found {issue_count} issue(s), queuing for Claude triage.")
+        print(f"Found {issue_count} issue(s), queuing for alerts.")
 
         # Drop a copy for pod-health-check to drain and triage via
         # Claude/gh - this job can't co-locate with the Claude config PVC
         # (no need to add a nodeSelector just for this). pod-health-check
         # posts the triaged result to Discord (ARR_QUEUE_CHANNEL_ID via the
-        # Tars bot) - see "Claude-triaged alerts" in the repo README.
+        # Tars bot) - see "Alerting" in the repo README.
         queue_dir = "/queue/.tars-triage-queue"
         os.makedirs(queue_dir, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d%H%M%S")
