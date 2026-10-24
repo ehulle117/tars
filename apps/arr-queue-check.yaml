@@ -109,6 +109,13 @@ data:
                 if named and not any(n in prowlarr_stale_names for n in named):
                     print(f"[{app['name']}] skipping app-side indexer warning (Prowlarr healthy): {msg}")
                     continue
+            # Same app-side backoff, worded differently when every indexer the
+            # app has is backed off at once (no names given). Lidarr only has
+            # three, so one flaky one plus two long-failing ones trips it.
+            if (msg.startswith("All ") and "temporarily unavailable due to recent indexer errors" in msg
+                    and prowlarr_error is None and not prowlarr_stale):
+                print(f"[{app['name']}] skipping app-side indexer warning (Prowlarr healthy): {msg}")
+                continue
             section["health"].append({"level": h["type"], "message": msg})
 
     has_issues = (
