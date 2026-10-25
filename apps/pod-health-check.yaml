@@ -110,7 +110,11 @@ data:
             if terminated and terminated.get("reason") == "OOMKilled" and recent_restart:
                 issues.append(f"`{full}` container `{cs['name']}`: OOMKilled {minutes_since(finished_at):.0f}m ago")
 
-            if cs.get("restartCount", 0) >= RESTART_COUNT_THRESHOLD and recent_restart:
+            # reason "Unknown" (exit 255) = the node went away under the
+            # container (e.g. a Case reboot restarts every pod on the VM), not
+            # a crash. resource-pressure-check already alerts on the node.
+            node_restart = terminated and terminated.get("reason") == "Unknown"
+            if cs.get("restartCount", 0) >= RESTART_COUNT_THRESHOLD and recent_restart and not node_restart:
                 issues.append(
                     f"`{full}` container `{cs['name']}`: {cs['restartCount']} restarts, "
                     f"most recently {minutes_since(finished_at):.0f}m ago"
