@@ -57,7 +57,7 @@ code paths for the same job. This proposes one cohesive shape, bot-only.
 | *arr stuck imports / dead indexers | `arr-queue-check` | daily | alert |
 | Deluge stalled/errored torrents | `deluge-stall-check` | 2h | alert |
 | Argo CD app OutOfSync/Degraded | **new** — poll Argo's API instead of its native webhook, so it also routes through the bot | 15 min | alert |
-| Appdata backup job failures (Tars/Pi/Case-worker) | the 3 `*-appdata-backup` CronJobs | daily | alert |
+| Appdata backup job failures (Tars/Pi) | the 2 `*-appdata-backup` CronJobs | daily | alert |
 | Critical CVEs (Trivy) | `tars-updater-agent` | daily | alert |
 | OS/container update summary | `tars-updater-agent` | weekly | **digest** |
 

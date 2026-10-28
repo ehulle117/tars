@@ -2,8 +2,7 @@
 # kube-router policy controller).
 #
 # The pods below handle untrusted input - torrents (deluge), arbitrary
-# websites (flaresolverr), public game clients and Tailscale peers (valheim,
-# valheim2, mead), and ADS-B/aircraft lookups (adsb-tools). If one of them is
+# websites (flaresolverr), Tailscale peers (mead), and ADS-B/aircraft lookups (adsb-tools). If one of them is
 # compromised it shouldn't be a foothold into the rest of the cluster or the
 # home LAN, so:
 #   - nothing in this namespace accepts connections *from* them, and
@@ -48,14 +47,12 @@ spec:
             cidr: 10.42.0.0/31  # tars
         - ipBlock:
             cidr: 10.42.1.0/31  # k3s-worker-pi
-        - ipBlock:
-            cidr: 10.42.4.0/31  # k3s-worker-case
         # NotIn also matches pods with no `app` label (CronJob pods).
         - podSelector:
             matchExpressions:
               - key: app
                 operator: NotIn
-                values: [deluge, flaresolverr, valheim, valheim2, mead, adsb-tools-poller, adsb-tools-map, adsb-tools-coverage]
+                values: [deluge, flaresolverr, mead, adsb-tools-poller, adsb-tools-map, adsb-tools-coverage]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -67,7 +64,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [deluge, flaresolverr, valheim, valheim2, mead, adsb-tools-poller, adsb-tools-map, adsb-tools-coverage]
+        values: [deluge, flaresolverr, mead, adsb-tools-poller, adsb-tools-map, adsb-tools-coverage]
   policyTypes: ["Egress"]
   egress:
     - to:
@@ -85,9 +82,8 @@ spec:
             cidr: 0.0.0.0/0
             except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
 ---
-# The Tailscale sidecars (valheim, valheim2, mead) keep their node state in a
-# Secret, so they need the API server. Their ServiceAccounts' RBAC limits
-# them to their own state Secret. Both the ClusterIP and the post-DNAT
+# The Tailscale sidecar (mead) keeps its node state in a Secret, so it needs
+# the API server. Its ServiceAccount's RBAC limits it to its own state Secret. Both the ClusterIP and the post-DNAT
 # endpoint are listed since policy can match either.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -99,7 +95,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [valheim, valheim2, mead]
+        values: [mead]
   policyTypes: ["Egress"]
   egress:
     - to:
