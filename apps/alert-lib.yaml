@@ -18,13 +18,21 @@ data:
         # Discord's edge blocks Python urllib's TLS/HTTP fingerprint with a
         # 403; shelling out to busybox wget (present in python:3.12-alpine)
         # avoids it.
-        result = subprocess.run(
-            ["wget", "-q", "-O-", "--header=Authorization: Bot " + bot_token,
-             "--header=Content-Type: application/json",
-             "--post-data", json.dumps(payload),
-             f"https://discord.com/api/v10{path}"],
-            check=True, timeout=15, capture_output=True, text=True,
-        )
+        # Raise our own errors: CalledProcessError/TimeoutExpired put the
+        # whole argv (bot token included) in their message, which callers
+        # print into pod logs.
+        try:
+            result = subprocess.run(
+                ["wget", "-q", "-O-", "--header=Authorization: Bot " + bot_token,
+                 "--header=Content-Type: application/json",
+                 "--post-data", json.dumps(payload),
+                 f"https://discord.com/api/v10{path}"],
+                timeout=15, capture_output=True, text=True,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"Discord POST {path} timed out") from None
+        if result.returncode != 0:
+            raise RuntimeError(f"Discord POST {path} failed (wget exit {result.returncode}): {result.stderr.strip()[:200]}")
         return json.loads(result.stdout)
 
 
