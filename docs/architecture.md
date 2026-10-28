@@ -8,14 +8,6 @@ bulk storage). Everything deployed to Tars is defined in this repo's
 
 ```mermaid
 flowchart TB
-    subgraph internet["Internet"]
-        friend["Friend's PC\n(Tailscale client)"]
-    end
-
-    subgraph tailnet["Tailscale network"]
-        direction TB
-    end
-
     subgraph tars["Tars — k3s cluster"]
         argocd["Argo CD\n(namespace: argocd)\nwatches apps/ on main, auto-sync"]
 
@@ -25,7 +17,6 @@ flowchart TB
             deluge["Deluge\n(+ FlareSolverr)"]
             arm["ARM\n(disc ripper, needs /dev/sr0)"]
             kuma["Uptime Kuma"]
-            valheim["Valheim\n(+ tailscale sidecar)"]
             updater["tars-updater-agent\n(Trivy scans, update digest)"]
             backup["backup CronJob\n(daily 3 AM)"]
         end
@@ -41,9 +32,6 @@ flowchart TB
     arrstack -->|ReadWriteMany PVC\nnfs-media| nfs
     deluge -->|ReadWriteMany PVC\nnfs-media| nfs
     arm -->|ReadWriteMany PVC\nnfs-media| nfs
-
-    valheim <-->|UDP over WireGuard,\nshared pod netns| tailnet
-    friend <--> tailnet
 
     updater -->|weekly digest| discordbot["Discord\n(Tars bot)"]
     kuma -.->|health checks| appsns
@@ -79,10 +67,6 @@ sequenceDiagram
 
 ## Notable design choices
 
-- **Valheim over Tailscale, not port-forwarding**: the pod runs a Tailscale
-  sidecar in the same network namespace as the game server, so the pod's
-  tailnet IP *is* the game server address. No UDP ports opened to the
-  internet, no NAT traversal. Full writeup: [`docs/valheim/README.md`](valheim/README.md).
 - **Prowlarr + FlareSolverr**: Prowlarr centralizes indexer config for the
   *arr stack; FlareSolverr sits in front of indexers that use Cloudflare
   challenges.

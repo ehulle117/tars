@@ -47,8 +47,7 @@ spec:
 # Nightly restart: FlareSolverr's Chromium gets stuck after days of uptime
 # and challenge solves start timing out at 120s (seen 2026-10-05 after 14d
 # up; kickass/Uindex/BT.etree indexers dropped out of Prowlarr until a manual
-# restart). Same in-cluster `kubectl rollout restart` pattern as
-# valheim2-restart-bot, scoped to just this Deployment.
+# restart). In-cluster `kubectl rollout restart`, scoped to just this Deployment.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

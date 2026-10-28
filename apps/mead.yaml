@@ -13,7 +13,7 @@ spec:
 ---
 apiVersion: apps/v1
 # Tailscale access for people off the LAN (Gabe): a sidecar joins the tailnet as
-# its own device, `homebrew`, and that one device is shared, same as valheim2. See
+# its own device, `homebrew`, and that one device is shared. See
 # docs/mead-tailscale.md for the auth-key secret, the grant and the share.
 apiVersion: v1
 kind: ServiceAccount
@@ -76,8 +76,8 @@ spec:
       labels:
         app: mead
     spec:
-      # amd64 image. Moved off k3s-worker-case 2026-10-16 (that VM is now
-      # valheim2-only); mead.db was copied into mead-data-tars first.
+      # amd64 image. Moved off k3s-worker-case 2026-10-16 (since removed);
+      # mead.db was copied into mead-data-tars first.
       # Moving nodes again strands the local-path PVC: copy mead.db across first.
       nodeSelector:
         kubernetes.io/hostname: tars
@@ -124,8 +124,7 @@ spec:
             # with no root or NET_ADMIN.
             - name: TS_USERSPACE
               value: "true"
-            # tag:game is the tag the valheim nodes already use, so the policy
-            # needs no new tagOwners entry.
+            # tag:game already has a tagOwners entry in the tailnet policy.
             - name: TS_EXTRA_ARGS
               value: "--advertise-tags=tag:game"
             - name: TS_SERVE_CONFIG

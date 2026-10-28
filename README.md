@@ -33,10 +33,9 @@ All workloads run in the `apps` namespace unless noted.
 | [Fetcharr](https://github.com/egg82/fetcharr) | [`apps/fetcharr.yaml`](apps/fetcharr.yaml) | `egg82/fetcharr` | Syncs quality profiles/tags across *arr apps |
 | [Home Assistant](https://www.home-assistant.io/) | [`apps/homeassistant.yaml`](apps/homeassistant.yaml) | `ghcr.io/home-assistant/home-assistant` | Home automation; Sonoff SNZB-02 temp/humidity sensors via ZHA. The Sonoff Zigbee dongle is plugged into `tars` (pod is privileged and mounts `/dev/serial` for ZHA's `/dev/serial/by-id/...` path) - restart the pod after plugging/replugging it. Port 8123 |
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | [`apps/uptime-kuma.yaml`](apps/uptime-kuma.yaml) | `louislam/uptime-kuma` | Status/uptime monitoring for the cluster |
-| [Valheim](docs/valheim/README.md) | [`apps/valheim.yaml`](apps/valheim.yaml) | `ghcr.io/lloesche/valheim-server` | Dedicated game server, reachable over Tailscale (see linked doc for network diagram) |
 | [Mead Log](apps/mead/PLAN.md) | [`apps/mead.yaml`](apps/mead.yaml) | `ghcr.io/ehulle117/tars-mead` | Custom service: tracks mead batches (planned/active/archived), hydrometer readings, per-batch costs, an inventory with reorder levels and a shopping list (plan a batch against the shelf), a who-paid ledger, bottles left / tastings / printable labels with photos, batch comparison and CSV export, iSpindel readings ([setup](docs/mead-ispindel.md)), TOSNA nutrient schedule, stabilize/backsweeten math, and starter recipes from the r/mead wiki. FastAPI + SQLite (photos beside it) on the `mead-data-tars` local-path PVC on `tars`, covered by the 3 AM tars appdata backup. Shared with Gabe over Tailscale ([setup](docs/mead-tailscale.md)). http://homebrew.case.local (Nginx Proxy Manager route) / port 8770. `mead-bot` (same manifest) posts due tasks to Discord at 6 AM ET via the Tars bot; reply to a task with a reading (`1.040 68F`) or `done` to log it |
 | [tars-updater-agent](tars-updater-agent/README.md) | [`apps/tars-updater-agent.yaml`](apps/tars-updater-agent.yaml) | `ghcr.io/ehulle117/tars-updater-agent` | Custom service: daily Trivy vuln scans (critical findings also queued for alerts — see "Alerting" below) + weekly OS/container update digest posted to Discord via the `Tars` bot (digest only, not triaged) |
-| Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml), [`apps/case-worker-appdata-backup.yaml`](apps/case-worker-appdata-backup.yaml), [`apps/pi-appdata-backup.yaml`](apps/pi-appdata-backup.yaml) | `alpine` | CronJobs, daily (3:00/3:15/3:30 AM), copy each node's local-path appdata to Case; queues for triage if a run fails — see "Alerting" below |
+| Appdata backup | [`apps/backup-cronjob.yaml`](apps/backup-cronjob.yaml), [`apps/pi-appdata-backup.yaml`](apps/pi-appdata-backup.yaml) | `alpine` | CronJobs, daily (3:00/3:30 AM), copy each node's local-path appdata to Case; queues for triage if a run fails — see "Alerting" below |
 | *arr queue check | [`apps/arr-queue-check.yaml`](apps/arr-queue-check.yaml) | `python:3.12-alpine` | CronJob, daily 8 AM, checks Radarr/Sonarr/Lidarr/Readarr queues for stuck imports (24h+, or immediately for executable/fake releases) and Prowlarr for long-failing indexers; queues a report only when something's actually wrong |
 | Bookshelf junk cleanup | [`apps/bookshelf-junk-cleanup.yaml`](apps/bookshelf-junk-cleanup.yaml) | `python:3.12-alpine` | CronJob, Sundays 6 AM, unmonitors obvious non-book junk (comic issues, box sets, samplers, study guides, coloring books, foreign editions) among Bookshelf books added in the last 8 days that have no file. Logs what it changed; `DRY_RUN=1` previews |
 | Deluge stall check | [`apps/deluge-stall-check.yaml`](apps/deluge-stall-check.yaml) | `python:3.12-alpine` | CronJob, every 2h, flags torrents in Deluge's `Error` state or stuck `Downloading` at 0 B/s for 2h+ |
@@ -61,7 +60,7 @@ Our own `ghcr.io/ehulle117/*` images are excluded since this repo builds them.
 ## Network policies
 
 [`apps/network-policies.yaml`](apps/network-policies.yaml) isolates the pods
-that handle untrusted input (deluge, flaresolverr, valheim/valheim2, mead,
+that handle untrusted input (deluge, flaresolverr, mead,
 adsb-tools). No other pod accepts connections from them, and they can reach
 only DNS and the public internet: not the LAN, and not other pods. Everything
 else keeps today's behavior. When adding an app like that, add its `app`
@@ -176,7 +175,7 @@ moments - validate with `--dry-run=client` and re-verify after merge.
   respectively — not the same key used for interactive SSH access.
 - **`uptime-kuma-push`** (`apps` namespace): one push-monitor URL per key
   (`pod_health_check_url`, `resource_pressure_check_url`,
-  `tars_appdata_backup_url`, `case_worker_appdata_backup_url`,
+  `tars_appdata_backup_url`,
   `pi_appdata_backup_url`). `pod-health-check`/`resource-pressure-check`
   ping unconditionally at the end of every run; the backup CronJobs ping
   only on success. This catches a job crashing before it ever reaches its

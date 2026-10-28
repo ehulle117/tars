@@ -2,8 +2,7 @@
 
 Mead Log (`apps/mead.yaml`) runs a Tailscale sidecar that joins the tailnet as its own
 device, `homebrew`. Sharing that one device gives someone off the LAN (Gabe) the app and
-nothing else: not tars, not case, not the rest of the tailnet. Same pattern as
-[valheim2](valheim2/README.md).
+nothing else: not tars, not case, not the rest of the tailnet.
 
 The app has no login, so anyone it's shared with can add, edit and delete everything.
 
@@ -11,7 +10,7 @@ The app has no login, so anyone it's shared with can add, edit and delete everyt
 
 ### 1. Policy: allow the port
 
-The sidecar uses `tag:game`, which the valheim nodes already use, so `tagOwners` needs no
+The sidecar uses `tag:game`, which already has a `tagOwners` entry, so that needs no
 change. In the admin console under **Access controls**, add one grant:
 
 ```jsonc
@@ -24,15 +23,14 @@ change. In the admin console under **Access controls**, add one grant:
 ],
 ```
 
-Sharing is still per device: Gabe reaches only what's shared with him, so this doesn't
-open anything on the valheim servers to him (nothing listens on 80 there). Port 80 on
+Sharing is still per device: Gabe reaches only what's shared with him. Port 80 on
 `homebrew` forwards to the app (see the `mead-tailscale-serve` ConfigMap), so the address
 has no port number.
 
 ### 2. Auth key
 
 **Settings → Keys → Generate auth key**: not reusable, **pre-approved**. A plain
-untagged key works, same as valheim: the sidecar asks for `tag:game` itself. Tagged
+untagged key works: the sidecar asks for `tag:game` itself. Tagged
 devices don't expire, so no key-expiry step is needed.
 
 ### 3. Secret
