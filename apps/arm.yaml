@@ -30,7 +30,7 @@ spec:
     spec:
       containers:
         - name: arm
-          image: automaticrippingmachine/automatic-ripping-machine:latest@sha256:1f7d254fc93cc876767f6c7242e93c03913c5ef2635e9c247b14a78c954dca04
+          image: automaticrippingmachine/automatic-ripping-machine:latest@sha256:441b8f07bd85da6d65a8715cf8365f1efd8936538acca47c9d43940bed8900f2
           securityContext:
             privileged: true
           ports:
