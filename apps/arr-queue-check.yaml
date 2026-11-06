@@ -8,6 +8,7 @@ data:
     import json
     import os
     import re
+    import sys
     import urllib.request
     from datetime import datetime, timezone
 
@@ -26,11 +27,20 @@ data:
     PROWLARR_KEY = os.environ["PROWLARR_API_KEY"]
     INDEXER_STALE_DAYS = 3
 
+    # --sweep (hourly CronJob): only remove fake executable releases, skip the
+    # rest of the morning report.
+    SWEEP = "--sweep" in sys.argv
+
 
     def api_get(host, port, path, api_key, timeout=15):
         req = urllib.request.Request(f"http://{host}:{port}{path}", headers={"X-Api-Key": api_key})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
+
+
+    def api_delete(host, port, path, api_key, timeout=15):
+        req = urllib.request.Request(f"http://{host}:{port}{path}", method="DELETE", headers={"X-Api-Key": api_key})
+        urllib.request.urlopen(req, timeout=timeout).close()
 
 
     def hours_since(iso_ts):
@@ -43,22 +53,23 @@ data:
     prowlarr_stale = []
     prowlarr_error = None
 
-    try:
-        statuses = api_get(PROWLARR_HOST, PROWLARR_PORT, "/api/v1/indexerstatus", PROWLARR_KEY)
-        indexers = {i["id"]: i["name"] for i in api_get(PROWLARR_HOST, PROWLARR_PORT, "/api/v1/indexer", PROWLARR_KEY)}
-        for s in statuses:
-            initial = s.get("initialFailure")
-            if not initial:
-                continue
-            days = hours_since(initial) / 24
-            if days >= INDEXER_STALE_DAYS:
-                prowlarr_stale.append({
-                    "name": indexers.get(s["indexerId"], f"id={s['indexerId']}"),
-                    "since": initial[:10],
-                    "days": days,
-                })
-    except Exception as e:
-        prowlarr_error = str(e)
+    if not SWEEP:
+        try:
+            statuses = api_get(PROWLARR_HOST, PROWLARR_PORT, "/api/v1/indexerstatus", PROWLARR_KEY)
+            indexers = {i["id"]: i["name"] for i in api_get(PROWLARR_HOST, PROWLARR_PORT, "/api/v1/indexer", PROWLARR_KEY)}
+            for s in statuses:
+                initial = s.get("initialFailure")
+                if not initial:
+                    continue
+                days = hours_since(initial) / 24
+                if days >= INDEXER_STALE_DAYS:
+                    prowlarr_stale.append({
+                        "name": indexers.get(s["indexerId"], f"id={s['indexerId']}"),
+                        "since": initial[:10],
+                        "days": days,
+                    })
+        except Exception as e:
+            prowlarr_error = str(e)
 
     # The *arr apps reach indexers through Prowlarr with a shorter timeout, so a
     # slow FlareSolverr/Cloudflare solve (kickass ~70-100s) marks them failed
@@ -82,10 +93,20 @@ data:
                 continue
             age_h = hours_since(rec["added"]) if rec.get("added") else 0
             msgs = rec.get("statusMessages") or []
-            # Fake .exe releases are malware, not a slow import - report them immediately.
-            if age_h < STUCK_AGE_HOURS and "executable" not in json.dumps(msgs).lower():
-                continue
             err = "; ".join(m.get("title", "") for m in msgs) or state
+            if "executable" in json.dumps(msgs).lower():
+                # Fake release: clean title, .exe payload, so the release-profile
+                # title filters can't catch it before the grab. Remove it from the
+                # download client, blocklist it, and let the app search again.
+                try:
+                    api_delete(app["host"], app["port"],
+                               f"/api/{app['api']}/queue/{rec['id']}?removeFromClient=true&blocklist=true&skipRedownload=false",
+                               app["key"])
+                    state = "removed + blocklisted"
+                except Exception as e:
+                    err += f"; auto-remove failed: {e}"
+            elif SWEEP or age_h < STUCK_AGE_HOURS:
+                continue
             section["stuck"].append({
                 "title": rec.get("title", "unknown"),
                 "indexer": rec.get("indexer", "unknown"),
@@ -94,6 +115,8 @@ data:
                 "error": err,
             })
 
+        if SWEEP:
+            continue
         try:
             health = api_get(app["host"], app["port"], f"/api/{app['api']}/health", app["key"])
         except Exception as e:
@@ -130,7 +153,8 @@ data:
         issue_count = sum(len(s["stuck"]) + len(s["health"]) + (1 if s["error"] else 0) for s in sections)
         issue_count += len(prowlarr_stale) + (1 if prowlarr_error else 0)
 
-        text_lines = [f"Morning *arr stack check: {issue_count} issue(s) found\n"]
+        heading = "*arr executable sweep" if SWEEP else "Morning *arr stack check"
+        text_lines = [f"{heading}: {issue_count} issue(s) found\n"]
         for section in sections:
             if not (section["stuck"] or section["health"] or section["error"]):
                 continue
@@ -163,7 +187,8 @@ data:
         queue_dir = "/queue/.tars-triage-queue"
         os.makedirs(queue_dir, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        with open(f"{queue_dir}/arr-queue-check-{stamp}.txt", "w") as f:
+        label = "arr-exe-sweep" if SWEEP else "arr-queue-check"
+        with open(f"{queue_dir}/{label}-{stamp}.txt", "w") as f:
             f.write(text_body)
 ---
 apiVersion: batch/v1
@@ -210,6 +235,43 @@ spec:
                 secretKeyRef:
                   name: arr-api-keys
                   key: PROWLARR_API_KEY
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: triage-queue
+              mountPath: /queue
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: arr-queue-check-script
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc
+---
+# Hourly: same script with --sweep, so a fake .exe release is removed and
+# re-searched within the hour instead of waiting for the 8 AM report.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: arr-exe-sweep
+  namespace: apps
+spec:
+  schedule: "25 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: arr-exe-sweep
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py", "--sweep"]
+            envFrom:
+            - secretRef:
+                name: arr-api-keys
             volumeMounts:
             - name: script
               mountPath: /scripts
