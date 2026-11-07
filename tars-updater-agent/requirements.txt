@@ -1,5 +1,5 @@
-kubernetes==29.0.0
+kubernetes==37.0.1
 schedule==1.2.2
-PyYAML==6.0.1
-requests==2.32.3
+PyYAML==6.0.3
+requests==2.34.2
 certifi>=2026.10.19  # GHSA-6q48-6c7w-9gw2 (compromised emSign intermediates), tars#158
