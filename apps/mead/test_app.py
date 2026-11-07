@@ -456,3 +456,24 @@ def test_ispindel():
     s = main.stats(con, main.get_batch(con, bid))
     assert s["stable"] and s["next"].startswith("Stabilize") and s["device_reads"] == 30
     assert sum(1 for t in s["timeline"] if t["what"].startswith("Reading")) == 1  # just the latest
+
+
+def test_reminders():
+    from datetime import date, timedelta
+    con = main.db()
+    bid = con.execute("INSERT INTO batch (name, status, start_date) VALUES ('Spiced', 'secondary', '2026-10-01')").lastrowid
+    con.commit()
+    today = date.today()
+    c.post(f"/batch/{bid}/reminder", data={"task": "Pull the clove", "due_on": today.isoformat(), "every_days": "2"})
+    c.post(f"/batch/{bid}/reminder", data={"task": "Pull the cardamom", "due_on": (today + timedelta(days=5)).isoformat()})
+    assert "Pull the cardamom" in c.get(f"/batch/{bid}").text
+    due = [t for t in c.get("/api/tasks").json() if t.get("reminder") and t["batch_id"] == bid]
+    assert [t["task"].split(" (")[0] for t in due] == ["Reminder — Pull the clove"] and due[0]["every_days"] == 2
+    rid = due[0]["reminder"]
+    c.post(f"/batch/{bid}/reminder/{rid}/later")
+    assert con.execute("SELECT due_on FROM reminder WHERE id=?", (rid,)).fetchone()[0] == (today + timedelta(days=2)).isoformat()
+    assert not [t for t in c.get("/api/tasks").json() if t.get("reminder") and t["batch_id"] == bid]
+    c.post(f"/batch/{bid}/reminder/{rid}/done")
+    assert con.execute("SELECT done_on FROM reminder WHERE id=?", (rid,)).fetchone()[0] == today.isoformat()
+    assert "Done: Pull the clove" in c.get(f"/batch/{bid}").text
+    assert c.post(f"/batch/{bid}/reminder/{rid}/done").status_code == 404  # already closed

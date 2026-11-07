@@ -91,6 +91,25 @@
 </section>
 {% endif %}
 
+{% if b.status != "recipe" %}
+<section id="reminders">
+  <h2>Reminders</h2>
+  {% for r in reminders %}<div class="row" style="align-items:baseline">
+    <span class="{{ 'due' if r.due_on <= today }}">{{ r.due_on }}{% if r.every_days %} · every {{ r.every_days }}d{% endif %}</span>
+    <b>{{ r.task }}</b>
+    <form class="inline" method="post" action="/batch/{{ b.id }}/reminder/{{ r.id }}/done"><button class="ghost">Done</button></form>
+    <form class="inline" method="post" action="/batch/{{ b.id }}/reminder/{{ r.id }}/later"><button class="ghost">Not yet</button></form>
+    <form class="inline" method="post" action="/batch/{{ b.id }}/reminder/{{ r.id }}/delete"><button class="link" title="Remove">✕</button></form>
+  </div>{% else %}<p class="muted">None. Add one for steps like pulling spices; it's posted to Discord when due.</p>{% endfor %}
+  <form class="row" method="post" action="/batch/{{ b.id }}/reminder">
+    <label>Task<input name="task" size="30" required placeholder="Taste; pull the clove when ready"></label>
+    <label>Due<input name="due_on" type="date" value="{{ today }}"></label>
+    <label>Repeat every (days)<input name="every_days" type="number" min="1" style="width:5em" placeholder="none"></label>
+    <button>Add reminder</button>
+  </form>
+</section>
+{% endif %}
+
 <section class="stats" style="margin-top:1rem">
   <div><small>OG{% if s.reads %}{% elif s.est_og %} (est.){% else %} (target){% endif %}</small><b>{{ "%.3f"|format(s.og) if s.og else "—" }}</b></div>
   <div><small>Now</small><b>{{ "%.3f"|format(s.cur) if s.cur else "—" }}</b></div>

@@ -82,6 +82,9 @@ CREATE TABLE IF NOT EXISTS device (
 CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, author TEXT, page TEXT, message TEXT NOT NULL,
   done INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS reminder (
+  id INTEGER PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES batch ON DELETE CASCADE, task TEXT NOT NULL,
+  due_on TEXT NOT NULL, every_days INTEGER, done_on TEXT);
 """
 
 
@@ -411,7 +414,10 @@ def batch_view(request: Request, bid: int):
         photos = con.execute("SELECT * FROM photo WHERE batch_id=? ORDER BY id DESC", (bid,)).fetchall()
         device_names = [r[0] for r in con.execute("SELECT name FROM device ORDER BY name")]
         stock_all = con.execute("SELECT * FROM inventory WHERE kind IS NOT 'equipment' ORDER BY kind, name").fetchall()
+        reminders = con.execute("SELECT * FROM reminder WHERE batch_id=? AND done_on IS NULL ORDER BY due_on, id",
+                                (bid,)).fetchall()
     return tpl.TemplateResponse(request, "batch.html", {"plan": plan, "stock_all": stock_all, "photos": photos,
+        "reminders": reminders,
         "device_names": device_names,
         "b": b, "s": s, "events": events, "statuses": STATUSES, "kinds": KINDS, "event_kinds": EVENTS, "units": UNITS,
         "stock": con.execute("SELECT * FROM inventory WHERE qty > 0.005 AND kind IS NOT 'equipment' "
@@ -529,6 +535,37 @@ async def quick_log_save(request: Request):
     with db() as con:
         name = get_batch(con, int(bid))["name"]
     return back(f"/log?batch={int(bid)}&saved={quote(name)}")
+
+
+@app.post("/batch/{bid}/reminder")
+async def add_reminder(bid: int, request: Request):
+    """A one-off step the brewing process doesn't know about (pull the spices, taste...), posted to Discord when due.
+    With every_days, "not yet" pushes it that many days out instead of closing it."""
+    f = await request.form()
+    every = num(f.get("every_days"))
+    with db() as con:
+        get_batch(con, bid)
+        con.execute("INSERT INTO reminder (batch_id, task, due_on, every_days) VALUES (?,?,?,?)",
+                    (bid, f.get("task"), f.get("due_on") or date.today().isoformat(), int(every) if every else None))
+    return back(f"/batch/{bid}")
+
+
+@app.post("/batch/{bid}/reminder/{rid}/{action}")
+def reminder_action(bid: int, rid: int, action: str, request: Request):
+    """done: close it and log it; later: due again in every_days (1 when unset)."""
+    with db() as con:
+        r = con.execute("SELECT * FROM reminder WHERE id=? AND batch_id=? AND done_on IS NULL", (rid, bid)).fetchone()
+        if not r or action not in ("done", "later"):
+            raise HTTPException(404)
+        today = date.today()
+        if action == "done":
+            con.execute("UPDATE reminder SET done_on=? WHERE id=?", (today.isoformat(), rid))
+            con.execute("INSERT INTO event (batch_id, on_date, kind, note, who) VALUES (?,?,?,?,?)",
+                        (bid, today.isoformat(), "note", f"Done: {r['task']}", who(request)))
+        else:
+            con.execute("UPDATE reminder SET due_on=? WHERE id=?",
+                        ((today + timedelta(days=r["every_days"] or 1)).isoformat(), rid))
+    return back(f"/batch/{bid}")
 
 
 @app.post("/batch/{bid}/event")
@@ -802,7 +839,7 @@ def label_sheet(request: Request, bid: int):
 
 @app.post("/batch/{bid}/{table}/{rid}/delete")
 def delete_row(bid: int, table: str, rid: int):
-    if table not in ("ingredient", "reading", "event", "expense", "bottle_out", "photo"):  # whitelisted: interpolated
+    if table not in ("ingredient", "reading", "event", "expense", "bottle_out", "photo", "reminder"):  # whitelisted: interpolated
         raise HTTPException(404)
     with db() as con:
         if table == "photo":  # the file goes too
@@ -1137,6 +1174,11 @@ def api_tasks():
             s = stats(con, b)
             for problem in device_problems(con, b):
                 out.append({**summary(b, s), "task": problem, "link": None, "due": True})
+            for r in con.execute("SELECT * FROM reminder WHERE batch_id=? AND done_on IS NULL AND due_on <= ? "
+                                 "ORDER BY due_on, id", (b["id"], date.today().isoformat())):
+                # the due date is in the text so a pushed-out reminder reads as new to the bot's repost check
+                out.append({**summary(b, s), "task": f"Reminder — {r['task']} ({day(date.fromisoformat(r['due_on']))})",
+                            "link": None, "due": True, "reminder": r["id"], "every_days": r["every_days"]})
             if not s["next"] or s["auto"]:
                 continue
             t = summary(b, s)
