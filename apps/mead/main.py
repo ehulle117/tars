@@ -551,8 +551,9 @@ async def add_reminder(bid: int, request: Request):
 
 
 @app.post("/batch/{bid}/reminder/{rid}/{action}")
-def reminder_action(bid: int, rid: int, action: str, request: Request):
+async def reminder_action(bid: int, rid: int, action: str, request: Request):
     """done: close it and log it; later: due again in every_days (1 when unset)."""
+    dest = (await request.form()).get("back") or ""
     with db() as con:
         r = con.execute("SELECT * FROM reminder WHERE id=? AND batch_id=? AND done_on IS NULL", (rid, bid)).fetchone()
         if not r or action not in ("done", "later"):
@@ -565,7 +566,26 @@ def reminder_action(bid: int, rid: int, action: str, request: Request):
         else:
             con.execute("UPDATE reminder SET due_on=? WHERE id=?",
                         ((today + timedelta(days=r["every_days"] or 1)).isoformat(), rid))
-    return back(f"/batch/{bid}")
+    return back(dest if dest.startswith("/") and not dest.startswith("//") else f"/batch/{bid}")
+
+
+@app.get("/tasks")
+def tasks_page(request: Request):
+    """Everything to do, soonest first: each batch's next step plus every open reminder, due or not."""
+    items = []
+    with db() as con:
+        for b in con.execute("SELECT * FROM batch WHERE status IN ('primary', 'secondary', 'aging')"):
+            s = stats(con, b)
+            if s["next"] and not s["auto"]:
+                items.append({"b": b, "due": s["due"], "label": s["due_label"], "task": s["next"],
+                              "link": s["next_link"], "state": s["state"], "done_kind": s["done_kind"]})
+        for r in con.execute("SELECT r.*, b.name FROM reminder r JOIN batch b ON b.id = r.batch_id "
+                             "WHERE r.done_on IS NULL"):
+            due = date.fromisoformat(r["due_on"])
+            items.append({"b": {"id": r["batch_id"], "name": r["name"]}, "due": due, "label": due_label(due),
+                          "task": r["task"], "reminder": r["id"], "every_days": r["every_days"]})
+    items.sort(key=lambda i: i["due"] or date.max)
+    return tpl.TemplateResponse(request, "tasks.html", {"items": items, "today": date.today()})
 
 
 @app.post("/batch/{bid}/event")

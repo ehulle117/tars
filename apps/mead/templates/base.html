@@ -119,6 +119,7 @@
   </a>
   <nav aria-label="Main">
     <a href="/" class="{{ 'on' if path == '/' or path.startswith('/batch') }}">Batches</a>
+    <a href="/tasks" class="{{ 'on' if path.startswith('/tasks') }}">Tasks</a>
     <a href="/recipes" class="{{ 'on' if path.startswith('/recipes') }}">Recipes</a>
     <a href="/inventory" class="{{ 'on' if path.startswith('/inventory') }}">Inventory</a>
     <a href="/shopping" class="{{ 'on' if path.startswith('/shopping') }}">Shopping</a>
