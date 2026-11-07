@@ -3,6 +3,7 @@
 Reply to a task message with:
   - a reading, e.g. "1.040" or "1.040 68F"  -> saved
   - "done"                                  -> logs the step (nutrient, stabilize, ...)
+  - "not yet"                               -> on a reminder: ask again in its repeat interval
 """
 import datetime as dt
 import logging
@@ -21,6 +22,9 @@ REPOST_DAYS = 3  # an open task is posted again after this many days
 SG_RE = re.compile(r"\b([01]\.\d{3,4})\b")
 TEMP_RE = re.compile(r"\b(\d{2,3}(?:\.\d)?)\s*°?\s*f\b", re.I)
 BATCH_RE = re.compile(r"\(#(\d+)\)")
+REMINDER_RE = re.compile(r"\[r(\d+)\]")
+DONE_WORDS = ("done", "did it", "✅")
+LATER_WORDS = ("not yet", "later", "no")
 # task wording (main.next_action) -> event logged on "done"; first match wins
 DONE_EVENTS = [("nutrient", "nutrient"), ("backsweeten", "backsweeten"), ("stabilize", "stabilize"),
                ("bottle", "bottle"), ("rack", "rack")]
@@ -40,6 +44,11 @@ def batch_of(message_text: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+def reminder_of(message_text: str) -> Optional[int]:
+    m = REMINDER_RE.search(message_text)
+    return int(m.group(1)) if m else None
+
+
 def done_event(task_text: str) -> str:
     low = task_text.lower()
     return next((ev for word, ev in DONE_EVENTS if word in low), "note")
@@ -48,9 +57,13 @@ def done_event(task_text: str) -> str:
 def task_message(t: dict) -> str:
     last = f"Last reading {t['last_sg']:.3f} on {t['last_date']}." if t["last_sg"] else "No readings yet."
     link = f" Guide: <{t['link']}>" if t["link"] else ""
+    if t.get("reminder"):
+        again = f"in {t['every_days']} day{'s' if t['every_days'] != 1 else ''}" if t.get("every_days") else "tomorrow"
+        reply = f"Reply `done`, or `not yet` to be reminded {again}. [r{t['reminder']}]"
+    else:
+        reply = "Reply with a reading (`1.040 68F`) or `done`."
     return (f"🍯 **{t['name']}** (#{t['batch_id']}): {t['task']}\n{last}{link}\n"
-            f"Reply with a reading (`1.040 68F`) or `done`. "
-            f"<{PUBLIC_URL}/batch/{t['batch_id']}>")
+            f"{reply} <{PUBLIC_URL}/batch/{t['batch_id']}>")
 
 
 def main():
@@ -108,10 +121,18 @@ def main():
         if not msg.content.strip():
             await msg.reply("I can't see replies with the @ mention turned off — reply again with it on (the default).")
             return
+        said = msg.content.strip().lower()
+        if (rid := reminder_of(ref.content)) and (said in DONE_WORDS or said in LATER_WORDS):
+            action = "done" if said in DONE_WORDS else "later"
+            async with http.post(f"{MEAD_URL}/batch/{bid}/reminder/{rid}/{action}", allow_redirects=False) as r:
+                ok = r.status == 303
+            await msg.reply(("✅ Done, logged." if action == "done" else "👍 I'll ask again.") if ok
+                            else "⚠️ Couldn't update that reminder (already done?).")
+            return
         reading = parse_reading(msg.content)
         if reading:
             await msg.reply(await save_reading(bid, *reading, note="via Discord"))
-        elif msg.content.strip().lower() in ("done", "did it", "✅"):
+        elif said in DONE_WORDS:
             task = ref.content.split(": ", 1)[-1].split("\n")[0]
             kind = done_event(task)
             async with http.post(f"{MEAD_URL}/batch/{bid}/event", allow_redirects=False,

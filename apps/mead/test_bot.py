@@ -22,3 +22,13 @@ def test_batch_and_done_mapping():
     assert bot.done_event("Aging — Bottle when clear, or keep aging") == "bottle"
     assert bot.done_event("Possibly stuck — Stable above target FG: check for a stuck fermentation") == "note"
     assert bot.done_event("Fermenting — Re-check gravity on Tue Oct 20") == "note"
+
+
+def test_reminder_message():
+    t = {"batch_id": 21, "name": "Black Tea", "task": "Reminder — Taste; pull the clove (Sun Nov 8)", "link": None,
+         "last_sg": 1.028, "last_date": "2026-11-06", "reminder": 3, "every_days": 1}
+    msg = bot.task_message(t)
+    assert bot.reminder_of(msg) == 3 and bot.batch_of(msg) == 21 and "reminded tomorrow" not in msg
+    assert "in 1 day." in msg and "`not yet`" in msg
+    assert "reminded tomorrow" in bot.task_message({**t, "every_days": None})
+    assert bot.reminder_of(bot.task_message({**t, "reminder": None})) is None
