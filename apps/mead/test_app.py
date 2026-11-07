@@ -470,7 +470,9 @@ def test_reminders():
     due = [t for t in c.get("/api/tasks").json() if t.get("reminder") and t["batch_id"] == bid]
     assert [t["task"].split(" (")[0] for t in due] == ["Reminder — Pull the clove"] and due[0]["every_days"] == 2
     rid = due[0]["reminder"]
-    c.post(f"/batch/{bid}/reminder/{rid}/later")
+    page = c.get("/tasks").text
+    assert "Pull the clove" in page and "Pull the cardamom" in page and "Spiced" in page
+    assert c.post(f"/batch/{bid}/reminder/{rid}/later", data={"back": "/tasks"}).url.path == "/tasks"
     assert con.execute("SELECT due_on FROM reminder WHERE id=?", (rid,)).fetchone()[0] == (today + timedelta(days=2)).isoformat()
     assert not [t for t in c.get("/api/tasks").json() if t.get("reminder") and t["batch_id"] == bid]
     c.post(f"/batch/{bid}/reminder/{rid}/done")

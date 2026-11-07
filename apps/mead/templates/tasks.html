@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Tasks · Mead Log{% endblock %}
+{% block body %}
+<h1 style="margin-bottom:.4rem">Tasks</h1>
+<p class="muted" style="margin-top:0">Each batch's next step and every open reminder, soonest first. Due ones are posted to Discord at 6 AM; add reminders on a batch's page.</p>
+
+{% if items %}
+<div class="upnext">
+  {% for i in items %}{% set due = i.due is not none and i.due <= today %}
+  <section class="task{{ ' due' if due }}">
+    <span class="when">{{ i.label }}{% if i.every_days %} · every {{ i.every_days }}d{% endif %}</span>
+    <b>{% if i.link %}<a href="{{ i.link }}" target="_blank" rel="noopener">{{ i.task }}</a>{% else %}{{ i.task }}{% endif %}</b>
+    <span class="soft"><a href="/batch/{{ i.b.id }}">{{ i.b.name }}</a> · {{ "Reminder" if i.reminder else i.state }}</span>
+    <div style="display:flex;gap:.5rem;align-items:center;margin-top:auto;padding-top:.25rem">
+      {% if i.reminder %}
+      <form class="inline" method="post" action="/batch/{{ i.b.id }}/reminder/{{ i.reminder }}/done">
+        <input type="hidden" name="back" value="/tasks"><button>Done</button></form>
+      <form class="inline" method="post" action="/batch/{{ i.b.id }}/reminder/{{ i.reminder }}/later">
+        <input type="hidden" name="back" value="/tasks"><button class="ghost">Not yet</button></form>
+      {% elif i.done_kind %}<form class="inline" method="post" action="/batch/{{ i.b.id }}/event">
+        <input type="hidden" name="kind" value="{{ i.done_kind }}"><input type="hidden" name="back" value="/tasks">
+        <button>Mark done</button></form>
+      {% elif not i.link %}<a class="btn ghost" href="/log?batch={{ i.b.id }}">Log a reading</a>{% endif %}
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">Nothing to do right now.</p>
+{% endif %}
+{% endblock %}
