@@ -37,7 +37,9 @@ data:
     ALERTS_CHANNEL_ID = os.environ["ALERTS_CHANNEL_ID"]
     QUEUE_DIR = "/queue/.tars-triage-queue"
     STATE_PATH = "/queue/.tars-alert-state.json"
-    REPOST_AFTER = 24 * 3600
+    # 23h, not 24h: daily detectors (arr-queue-check) post at the same minute
+    # each day, so a 24h window lands on the boundary and skips ~half the days.
+    REPOST_AFTER = 23 * 3600
     FORGET_AFTER = 7 * 24 * 3600
 
 
