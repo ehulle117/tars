@@ -60,14 +60,14 @@ spec:
         kubernetes.io/hostname: tars
       containers:
         - name: claude-code
-          image: node:22-bookworm-slim
+          image: node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
             - |
               apt-get update && \
               apt-get install -y --no-install-recommends git openssh-client ca-certificates curl ripgrep && \
-              npm install -g @anthropic-ai/claude-code@2.1.304 && \
+              npm install -g @anthropic-ai/claude-code@2.1.322 && \
               [ -e /root/.claude.json ] && [ ! -L /root/.claude.json ] && mv /root/.claude.json /root/.claude/claude.json; \
               ln -sf /root/.claude/claude.json /root/.claude.json && \
               sleep infinity
