@@ -86,7 +86,7 @@ spec:
             - name: ENABLE_PRIVOXY
               value: "yes"
             - name: STRICT_PORT_FORWARD
-              value: "yes"
+              value: "no"  # PIA renamed endpoints to *.pvt.site 2026-11-20; binhex PF check no longer matches. Revert once binhex/arch-int-vpn handles it.
             # The image's PIA endpoint resolver also adds Cloudflare IPs
             # (privateinternetaccess.com etc.) to --remote; they never answer
             # on UDP 1198 and each burned the full 60s keepalive, stretching
