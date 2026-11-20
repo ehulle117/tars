@@ -1,7 +1,7 @@
 # NetworkPolicies for the apps namespace (enforced by k3s's built-in
 # kube-router policy controller).
 #
-# The pods below handle untrusted input - torrents (deluge), arbitrary
+# The pods below handle untrusted input - torrents (deluge, qbittorrent), arbitrary
 # websites (flaresolverr), Tailscale peers (mead), and ADS-B/aircraft lookups (adsb-tools). If one of them is
 # compromised it shouldn't be a foothold into the rest of the cluster or the
 # home LAN, so:
@@ -52,7 +52,7 @@ spec:
             matchExpressions:
               - key: app
                 operator: NotIn
-                values: [deluge, flaresolverr, mead, adsb-tools-poller, adsb-tools-map, adsb-tools-coverage]
+                values: [deluge, qbittorrent, flaresolverr, mead, adsb-tools-poller, adsb-tools-map, adsb-tools-coverage]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -64,7 +64,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [deluge, flaresolverr, mead, adsb-tools-poller, adsb-tools-map, adsb-tools-coverage]
+        values: [deluge, qbittorrent, flaresolverr, mead, adsb-tools-poller, adsb-tools-map, adsb-tools-coverage]
   policyTypes: ["Egress"]
   egress:
     - to:
