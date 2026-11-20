@@ -49,6 +49,18 @@ data:
               - name: HD - 720p/1080p
               - name: Bluray
               - name: Bluray or WebDL (fallback)
+          # DV Profile 5 has no HDR10 base layer: purple/green on the Samsung TV.
+          - trash_ids:
+              - 923b6abef9b17f937fab56cfcf89e1f1 # DV (w/o HDR fallback)
+            assign_scores_to:
+              - name: Any
+              - name: SD
+              - name: HD-720p
+              - name: HD-1080p
+              - name: Ultra-HD
+              - name: HD - 720p/1080p
+              - name: Bluray
+              - name: Bluray or WebDL (fallback)
     sonarr:
       sonarr:
         base_url: http://sonarr-svc.apps.svc.cluster.local:8989
