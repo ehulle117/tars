@@ -121,11 +121,13 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: tars
-      # All DNS goes to Gluetun's resolver (DNS over TLS through the tunnel),
-      # not kube-dns, so tracker lookups don't leak outside the VPN.
+      # DNS goes to Gluetun's resolver (DNS over TLS through the tunnel), not
+      # kube-dns, so tracker lookups don't leak outside the VPN. 1.1.1.1 is
+      # only for the gluetun-servers init step, which runs before Gluetun's
+      # resolver exists; once the tunnel is up it is routed through it too.
       dnsPolicy: None
       dnsConfig:
-        nameservers: ["127.0.0.1"]
+        nameservers: ["127.0.0.1", "1.1.1.1"]
       initContainers:
         - name: config-init
           image: python:3.12-alpine
@@ -146,6 +148,18 @@ spec:
               mountPath: /config
             - name: config-init
               mountPath: /scripts
+        # Gluetun's built-in server list is frozen at its release date and
+        # still had PIA's pre-rename IPs (all unreachable). Fetch the current
+        # list from PIA before connecting; on failure fall back to built-in.
+        - name: gluetun-servers
+          image: qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+          command:
+            - /bin/sh
+            - -c
+            - /gluetun-entrypoint update -enduser -providers "private internet access" || echo "server list update failed - using built-in list"
+          volumeMounts:
+            - name: gluetun-data
+              mountPath: /gluetun
         # Native sidecar: starts before qBittorrent, and qBittorrent only
         # starts once the startupProbe sees the tunnel healthy.
         - name: gluetun
@@ -205,6 +219,9 @@ spec:
               value: "8090,8888"
             - name: TZ
               value: "America/New_York"
+          volumeMounts:
+            - name: gluetun-data
+              mountPath: /gluetun
           startupProbe:
             exec:
               command: ["/gluetun-entrypoint", "healthcheck"]
@@ -251,6 +268,8 @@ spec:
         - name: config-init
           configMap:
             name: qbittorrent-config-init
+        - name: gluetun-data
+          emptyDir: {}
         - name: downloads
           persistentVolumeClaim:
             claimName: deluge-downloads-pvc
