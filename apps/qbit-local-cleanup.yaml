@@ -1,0 +1,152 @@
+# qBittorrent port of deluge-local-cleanup (phase 4 of the Deluge migration).
+# Removes a finished movie torrent and its local data as soon as Radarr has
+# imported it at Bluray/Remux/BR-DISK quality, instead of letting it seed for
+# up to 30 days on tars's local disk (the 2026-10-13 DiskPressure outage).
+# Matching rules are unchanged from the Deluge job. Runs alongside
+# deluge-local-cleanup until Deluge is removed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qbit-local-cleanup-script
+  namespace: apps
+data:
+  cleanup.py: |
+    import http.cookiejar, json, os, re, sys, time, urllib.parse, urllib.request
+    from datetime import datetime, timezone
+
+    QB = os.environ.get("QB_URL", "http://qbittorrent-svc.apps.svc.cluster.local:8090")
+    RADARR = "http://radarr-svc.apps.svc.cluster.local:7878"
+    BLURAY_QUALITY_MARKERS = ("Bluray", "Remux", "BR-DISK")
+    DRY_RUN = os.environ.get("DRY_RUN") == "1"
+
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    def qb(path, data=None):
+        body = urllib.parse.urlencode(data).encode() if data is not None else None
+        with opener.open(f"{QB}/api/v2/{path}", body, timeout=30) as r:
+            return r.read()
+
+    def radarr_movies():
+        req = urllib.request.Request(f"{RADARR}/api/v3/movie", headers={"X-Api-Key": os.environ["RADARR_API_KEY"]})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read())
+
+    def norm(title):
+        return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+
+    def file_added_ts(movie):
+        added = ((movie.get("movieFile") or {}).get("dateAdded") or "")[:19]
+        try:
+            return datetime.strptime(added, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            return None
+
+    def match_movie(name_norm, completed_ts, movies):
+        """The imported movie this torrent is the source of, or None. Name must
+        start with the title and contain the year (a bare substring match once
+        deleted The Cars albums for the movie "Cars"), and Radarr's file must
+        have been added after the torrent finished - otherwise this is an
+        upgrade grab Radarr hasn't imported yet."""
+        for m in movies:
+            title = norm(m["title"])
+            added = file_added_ts(m)
+            if (title and name_norm.startswith(title + " ") and str(m.get("year")) in name_norm.split()
+                    and added is not None and completed_ts and added >= completed_ts):
+                return m
+        return None
+
+    def is_bluray_import(movie):
+        q = (movie.get("movieFile") or {}).get("quality", {}).get("quality", {}).get("name", "")
+        return any(marker in q for marker in BLURAY_QUALITY_MARKERS)
+
+    if "--selftest" in sys.argv:
+        m = {"title": "Cars", "year": 2006, "movieFile": {"dateAdded": "2026-11-20T12:00:00Z"}}
+        t = datetime(2026, 11, 20, 11, tzinfo=timezone.utc).timestamp()
+        assert match_movie(norm("Cars.2006.1080p.BluRay.x264-GRP"), t, [m])
+        assert not match_movie(norm("The Cars - Greatest Hits (1985)"), t, [m])
+        assert not match_movie(norm("Cars.2006.2160p.Remux"), t + 7200, [m])  # finished after import
+        print("selftest ok")
+        sys.exit(0)
+
+    imported = [m for m in radarr_movies() if is_bluray_import(m)]
+
+    # New pods can't reach qbittorrent-svc for the first few seconds while
+    # the network-policy controller catches up; a run that still can't reach
+    # it just waits for the next schedule.
+    for attempt in range(8):
+        try:
+            qb("auth/login", {"username": os.environ["QB_USER"], "password": os.environ["QB_PASS"]})
+            torrents = json.loads(qb("torrents/info?filter=completed&category=movies"))
+            break
+        except Exception as e:
+            if attempt == 7:
+                print(f"Couldn't reach qBittorrent, skipping this run: {e}")
+                sys.exit(0)
+            time.sleep(5)
+
+    to_remove = {t["hash"]: t["name"] for t in torrents
+                 if t["save_path"].rstrip("/") == "/downloads/complete/movies"
+                 and match_movie(norm(t["name"]), t["completion_on"], imported)}
+
+    if to_remove and not DRY_RUN:
+        qb("torrents/delete", {"hashes": "|".join(to_remove), "deleteFiles": "true"})
+
+    if to_remove:
+        print(f"{'Would remove' if DRY_RUN else 'Removed'} {len(to_remove)} already-imported torrent(s) and their local data:")
+        for name in to_remove.values():
+            print(f"  - {name}")
+    else:
+        print("No already-imported seeding torrents to clean up.")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: qbit-local-cleanup
+  namespace: apps
+spec:
+  # Hourly: the 6h spacing on deluge-local-cleanup was to dodge Deluge's
+  # torrent-handle wedges, which qBittorrent doesn't have.
+  schedule: "20 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          containers:
+          - name: qbit-local-cleanup
+            image: python:3.12-alpine
+            command: ["python", "/scripts/cleanup.py"]
+            env:
+            - name: QB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: qbittorrent-auth
+                  key: user
+            - name: QB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: qbittorrent-auth
+                  key: pass
+            - name: RADARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arr-api-keys
+                  key: RADARR_API_KEY
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: qbit-local-cleanup-script
