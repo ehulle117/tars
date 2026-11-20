@@ -1,0 +1,127 @@
+# qBittorrent port of deluge-stall-check (phase 4 of the Deluge migration).
+# Same thresholds and alert format: report torrents stalled 2h+ or errored,
+# and remove ones stalled 72h+ so the *arrs search for another release
+# (tars#81). Runs alongside deluge-stall-check until Deluge is removed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qbit-stall-check-script
+  namespace: apps
+data:
+  check.py: |
+    import http.cookiejar, json, os, sys, time, urllib.parse, urllib.request
+    from datetime import datetime
+
+    QB = os.environ.get("QB_URL", "http://qbittorrent-svc.apps.svc.cluster.local:8090")
+    STALL_MINUTES = int(os.environ.get("STALL_MINUTES", "120"))
+    REMOVE_STALL_HOURS = int(os.environ.get("REMOVE_STALL_HOURS", "72"))
+    DRY_RUN = os.environ.get("DRY_RUN") == "1"
+
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    def api(path, data=None):
+        body = urllib.parse.urlencode(data).encode() if data is not None else None
+        with opener.open(f"{QB}/api/v2/{path}", body, timeout=30) as r:
+            return r.read()
+
+    # New pods can't reach qbittorrent-svc for the first few seconds while
+    # the network-policy controller catches up, so retry the login.
+    for attempt in range(8):
+        try:
+            api("auth/login", {"username": os.environ["QB_USER"], "password": os.environ["QB_PASS"]})
+            break
+        except Exception as e:
+            if attempt == 7:
+                raise
+            time.sleep(5)
+
+    STALLED = {"stalledDL", "metaDL", "forcedMetaDL"}
+    now = time.time()
+    findings, removed, to_remove = [], [], []
+
+    for t in json.loads(api("torrents/info")):
+        name, state, pct = t["name"], t["state"], t["progress"] * 100
+        age_min = (now - t["added_on"]) / 60
+        is_dead_stall = (
+            (state in STALLED or (state == "downloading" and t["dlspeed"] == 0))
+            and pct < 100
+            and age_min >= STALL_MINUTES
+        )
+        if is_dead_stall and age_min >= REMOVE_STALL_HOURS * 60:
+            to_remove.append(t["hash"])
+            removed.append(f"{name}: removed after {age_min / 60:.0f}h stalled at {pct:.0f}%")
+        elif state in ("error", "missingFiles"):
+            findings.append(f"{name}: {state} state")
+        elif is_dead_stall:
+            findings.append(f"{name}: stalled at {pct:.0f}%, 0 B/s for {age_min:.0f}m+")
+
+    if to_remove and not DRY_RUN:
+        api("torrents/delete", {"hashes": "|".join(to_remove), "deleteFiles": "true"})
+
+    if removed:
+        print(f"{'Would remove' if DRY_RUN else 'Removed'} {len(removed)} torrent(s) stalled {REMOVE_STALL_HOURS}h+:")
+        for line in removed:
+            print(f"  - {line}")
+
+    if not findings and not removed:
+        print("No stalled or errored torrents.")
+    elif not findings:
+        print("Nothing left to report - all findings were past the removal threshold.")
+    else:
+        lines = [f"- {f}" for f in findings]
+        if removed:
+            lines += ["", f"Also auto-removed {len(removed)} torrent(s) past the {REMOVE_STALL_HOURS}h removal threshold:"]
+            lines += [f"- {r}" for r in removed]
+        text_body = "\n".join(lines)
+        print(f"Found {len(findings)} stalled/errored torrent(s), queuing for triage.")
+        if DRY_RUN:
+            print(text_body)
+            sys.exit(0)
+        queue_dir = "/queue/.tars-triage-queue"
+        os.makedirs(queue_dir, exist_ok=True)
+        with open(f"{queue_dir}/qbit-stall-check-{datetime.now():%Y%m%d%H%M%S}.txt", "w") as f:
+            f.write(text_body)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: qbit-stall-check
+  namespace: apps
+spec:
+  schedule: "47 1-23/2 * * *" # every 2 hours (odd UTC hours, :47)
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          containers:
+          - name: qbit-stall-check
+            image: python:3.12-alpine
+            command: ["python", "/scripts/check.py"]
+            env:
+            - name: QB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: qbittorrent-auth
+                  key: user
+            - name: QB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: qbittorrent-auth
+                  key: pass
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: triage-queue
+              mountPath: /queue
+          restartPolicy: OnFailure
+          volumes:
+          - name: script
+            configMap:
+              name: qbit-stall-check-script
+          - name: triage-queue
+            persistentVolumeClaim:
+              claimName: nfs-media-pvc

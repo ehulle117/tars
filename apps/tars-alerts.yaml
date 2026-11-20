@@ -1,6 +1,6 @@
 # Posts every detector's findings straight to Discord. Every detector
 # (pod-health-check, resource-pressure-check, arr-queue-check,
-# deluge-stall-check, router-check, argo-sync-check, case-health-check, the
+# deluge-stall-check, qbit-stall-check, router-check, argo-sync-check, case-health-check, the
 # three *-appdata-backup CronJobs, tars-updater-agent's critical-CVE alert)
 # only ever detects and drops a file in .tars-triage-queue/ on the shared
 # nfs-media-pvc. This job drains that directory every run: one Forum thread
