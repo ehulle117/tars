@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS reminder (
 
 ADDED_COLUMNS = [("batch", "bottles", "INTEGER"), ("reading", "who", "TEXT"), ("event", "who", "TEXT"),
                  ("expense", "who", "TEXT"), ("inventory", "reorder_at", "REAL"),
-                 ("batch", "ready_on", "TEXT"), ("batch", "ispindel", "TEXT")]
+                 ("batch", "ready_on", "TEXT"), ("batch", "ispindel", "TEXT"), ("batch", "snooze_until", "TEXT")]
 
 
 def db():
@@ -297,6 +297,9 @@ def stats(con, b) -> dict:
         s["days"] = (date.today() - date.fromisoformat(b["start_date"])).days
     s["state"], s["next"], s["next_link"], s["due"], s["done_kind"] = next_action(
         b, s, kinds, stabilized[-1] if stabilized else None)
+    snooze = date.fromisoformat(b["snooze_until"]) if b["snooze_until"] else None
+    if s["due"] and snooze and snooze > s["due"]:  # pushed out: the next step waits until then (reminders don't)
+        s["due"] = snooze
     s["due_label"] = due_label(s["due"]) if s["next"] else None
     s["auto"] = s["next"] == TRACKING
     if s["auto"]:
@@ -535,6 +538,19 @@ async def quick_log_save(request: Request):
     with db() as con:
         name = get_batch(con, int(bid))["name"]
     return back(f"/log?batch={int(bid)}&saved={quote(name)}")
+
+
+@app.post("/batch/{bid}/snooze")
+async def snooze(bid: int, request: Request):
+    """Push the batch's next step out `days` days (default 1): off Discord and the Up next list until then."""
+    days = num((await request.form()).get("days"))
+    days = 1 if days is None else days
+    if not 0 < days <= 60:
+        raise HTTPException(400, "days must be between 1 and 60")
+    with db() as con:
+        get_batch(con, bid)
+        con.execute("UPDATE batch SET snooze_until=? WHERE id=?", ((date.today() + timedelta(days=int(days))).isoformat(), bid))
+    return back(f"/batch/{bid}")
 
 
 @app.post("/batch/{bid}/reminder")
@@ -1204,6 +1220,12 @@ def api_tasks():
             t = summary(b, s)
             t["due"] = not (s["next"].startswith("Re-check gravity") and t["last_date"]
                             and (date.today() - date.fromisoformat(t["last_date"])).days < 7)
+            snooze = date.fromisoformat(b["snooze_until"]) if b["snooze_until"] else None
+            if snooze and snooze > date.today():
+                t["due"] = False
+            elif snooze and (date.today() - snooze).days < 3:
+                # new text, so the bot's 3-day repost check posts it again when the push-out ends
+                t["task"] += f" (pushed to {day(snooze)})"
             out.append(t)
     return out
 

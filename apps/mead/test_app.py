@@ -479,3 +479,25 @@ def test_reminders():
     assert con.execute("SELECT done_on FROM reminder WHERE id=?", (rid,)).fetchone()[0] == today.isoformat()
     assert "Done: Pull the clove" in c.get(f"/batch/{bid}").text
     assert c.post(f"/batch/{bid}/reminder/{rid}/done").status_code == 404  # already closed
+
+
+def test_snooze_pushes_next_step():
+    from datetime import date, timedelta
+    bid = int(c.post("/batch", data={"name": "snooze-check"}).url.path.split("/")[-1])
+    c.post(f"/batch/{bid}", data={"name": "snooze-check", "status": "secondary", "volume_gal": "1", "n_need": "low",
+                                  "nutrient_protocol": "recipe", "start_date": "2026-09-01"})
+    for d, sg in [("2026-09-01", "1.110"), ("2026-10-01", "1.010"), ("2026-10-09", "1.010")]:
+        c.post(f"/batch/{bid}/reading", data={"taken_on": d, "sg": sg})
+    task = lambda: next(t for t in c.get("/api/tasks").json() if t["batch_id"] == bid)  # noqa: E731
+    assert "Stabilize" in task()["task"] and task()["due"]
+    assert c.post(f"/batch/{bid}/snooze", data={"days": "0"}).status_code == 400
+    c.post(f"/batch/{bid}/snooze")
+    assert not task()["due"]  # held until tomorrow
+    con = main.db()
+    with con:  # pretend tomorrow came: due again, with new text so the bot reposts it
+        con.execute("UPDATE batch SET snooze_until=? WHERE id=?", (date.today().isoformat(), bid))
+    t = task()
+    assert t["due"] and "(pushed to" in t["task"]
+    with con:  # long past: back to the plain text
+        con.execute("UPDATE batch SET snooze_until=? WHERE id=?", ((date.today() - timedelta(days=10)).isoformat(), bid))
+    assert task()["due"] and "pushed" not in task()["task"]

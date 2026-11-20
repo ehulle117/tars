@@ -61,7 +61,7 @@ def task_message(t: dict) -> str:
         again = f"in {t['every_days']} day{'s' if t['every_days'] != 1 else ''}" if t.get("every_days") else "tomorrow"
         reply = f"Reply `done`, or `not yet` to be reminded {again}. [r{t['reminder']}]"
     else:
-        reply = "Reply with a reading (`1.040 68F`) or `done`."
+        reply = "Reply with a reading (`1.040 68F`), `done`, or `not yet` to push it to tomorrow."
     return (f"🍯 **{t['name']}** (#{t['batch_id']}): {t['task']}\n{last}{link}\n"
             f"{reply} <{PUBLIC_URL}/batch/{t['batch_id']}>")
 
@@ -132,6 +132,10 @@ def main():
         reading = parse_reading(msg.content)
         if reading:
             await msg.reply(await save_reading(bid, *reading, note="via Discord"))
+        elif said in LATER_WORDS:
+            async with http.post(f"{MEAD_URL}/batch/{bid}/snooze", allow_redirects=False) as r:
+                ok = r.status == 303
+            await msg.reply("👍 Pushed to tomorrow." if ok else "⚠️ Couldn't push that.")
         elif said in DONE_WORDS:
             task = ref.content.split(": ", 1)[-1].split("\n")[0]
             kind = done_event(task)
@@ -140,7 +144,7 @@ def main():
                 ok = r.status == 303
             await msg.reply(f"✅ Logged **{kind}**." if ok else "⚠️ Couldn't log that.")
         else:
-            await msg.reply("Reply with a reading like `1.040` (optionally `68F`), or `done`.")
+            await msg.reply("Reply with a reading like `1.040` (optionally `68F`), `done`, or `not yet`.")
 
     client.run(token, log_handler=None)
 
