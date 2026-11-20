@@ -83,6 +83,16 @@ data:
               - name: HD-1080p
               - name: Ultra-HD
               - name: HD - 720p/1080p
+          # DV Profile 5 has no HDR10 base layer: purple/green on the Samsung TV.
+          - trash_ids:
+              - 9b27ab6498ec0f31a3353992e19434ca # DV (w/o HDR fallback)
+            assign_scores_to:
+              - name: Any
+              - name: SD
+              - name: HD-720p
+              - name: HD-1080p
+              - name: Ultra-HD
+              - name: HD - 720p/1080p
 ---
 apiVersion: batch/v1
 kind: CronJob
